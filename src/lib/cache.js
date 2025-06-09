@@ -7,7 +7,7 @@ import { supabase } from './supabase'
  */
 export async function getCachedData(cacheKey) {
   try {
-    console.log(`Checking cache for key: ${cacheKey}`)
+    console.log(`🔍 CACHE: Checking cache for key: ${cacheKey}`)
     
     const { data, error } = await supabase
       .from('api_cache')
@@ -17,20 +17,20 @@ export async function getCachedData(cacheKey) {
       .maybeSingle() // Use maybeSingle() instead of single() to handle no results gracefully
     
     if (error) {
-      console.warn(`Cache query error for key ${cacheKey}:`, error)
+      console.warn(`⚠️ CACHE: Query error for key ${cacheKey}:`, error)
       return null
     }
     
     if (!data) {
-      console.log(`No valid cache found for key: ${cacheKey}`)
+      console.log(`❌ CACHE: No valid cache found for key: ${cacheKey}`)
       return null
     }
     
-    console.log(`Cache hit for key: ${cacheKey}`)
+    console.log(`✅ CACHE: Cache hit for key: ${cacheKey}`, { dataSize: JSON.stringify(data.data).length })
     return data.data
     
   } catch (error) {
-    console.error('Error retrieving cached data:', error)
+    console.error('💥 CACHE: Error retrieving cached data:', error)
     return null
   }
 }
@@ -45,7 +45,11 @@ export async function setCachedData(cacheKey, data, expirationMinutes = 30) {
   try {
     const expiresAt = new Date(Date.now() + expirationMinutes * 60 * 1000)
     
-    console.log(`Caching data for key: ${cacheKey}, expires: ${expiresAt.toISOString()}`)
+    console.log(`💾 CACHE: Caching data for key: ${cacheKey}`, {
+      dataSize: JSON.stringify(data).length,
+      expiresAt: expiresAt.toISOString(),
+      expirationMinutes
+    })
     
     // First try to update existing record
     const { data: existingData, error: selectError } = await supabase
@@ -55,11 +59,12 @@ export async function setCachedData(cacheKey, data, expirationMinutes = 30) {
       .maybeSingle()
     
     if (selectError) {
-      console.warn(`Error checking existing cache for ${cacheKey}:`, selectError)
+      console.warn(`⚠️ CACHE: Error checking existing cache for ${cacheKey}:`, selectError)
     }
     
     let result
     if (existingData) {
+      console.log(`🔄 CACHE: Updating existing cache record for ${cacheKey}`)
       // Update existing record
       result = await supabase
         .from('api_cache')
@@ -69,6 +74,7 @@ export async function setCachedData(cacheKey, data, expirationMinutes = 30) {
         })
         .eq('cache_key', cacheKey)
     } else {
+      console.log(`➕ CACHE: Creating new cache record for ${cacheKey}`)
       // Insert new record
       result = await supabase
         .from('api_cache')
@@ -80,28 +86,21 @@ export async function setCachedData(cacheKey, data, expirationMinutes = 30) {
     }
     
     if (result.error) {
-      console.error(`Error caching data for ${cacheKey}:`, result.error)
+      console.error(`💥 CACHE: Error caching data for ${cacheKey}:`, result.error)
       
       // If it's an RLS error, provide more specific guidance
       if (result.error.code === '42501') {
-        console.error('RLS Policy Error: The api_cache table policies may need to be updated to allow anonymous access')
-        console.error('Please run the RLS migration to fix this issue')
+        console.error('🔒 CACHE: RLS Policy Error - api_cache table policies may need to be updated')
       }
       
       return false
     }
     
-    console.log(`Successfully cached data for key: ${cacheKey}`)
+    console.log(`✅ CACHE: Successfully cached data for key: ${cacheKey}`)
     return true
     
   } catch (error) {
-    console.error('Error caching data:', error)
-    
-    // Provide helpful error messages for common issues
-    if (error.message?.includes('row-level security')) {
-      console.error('RLS Error: Please ensure the api_cache table has proper policies for anonymous access')
-    }
-    
+    console.error('💥 CACHE: Error caching data:', error)
     return false
   }
 }
@@ -111,23 +110,42 @@ export async function setCachedData(cacheKey, data, expirationMinutes = 30) {
  */
 export async function clearExpiredCache() {
   try {
-    console.log('Clearing expired cache entries...')
+    console.log('🧹 CACHE: Clearing expired cache entries...')
+    
+    const currentTime = new Date().toISOString()
+    console.log(`🕐 CACHE: Current time: ${currentTime}`)
+    
+    // First, check how many expired entries exist
+    const { data: expiredCheck, error: checkError } = await supabase
+      .from('api_cache')
+      .select('id, cache_key, expires_at')
+      .lt('expires_at', currentTime)
+    
+    if (checkError) {
+      console.error('💥 CACHE: Error checking expired entries:', checkError)
+      return false
+    }
+    
+    console.log(`📊 CACHE: Found ${expiredCheck?.length || 0} expired entries to delete`)
+    if (expiredCheck && expiredCheck.length > 0) {
+      console.log('🗑️ CACHE: Expired entries:', expiredCheck.map(e => ({ key: e.cache_key, expired: e.expires_at })))
+    }
     
     const { error, count } = await supabase
       .from('api_cache')
       .delete()
-      .lt('expires_at', new Date().toISOString())
+      .lt('expires_at', currentTime)
     
     if (error) {
-      console.error('Error clearing expired cache:', error)
+      console.error('💥 CACHE: Error clearing expired cache:', error)
       return false
     }
     
-    console.log(`Cleared ${count || 0} expired cache entries`)
+    console.log(`✅ CACHE: Cleared ${count || 0} expired cache entries`)
     return true
     
   } catch (error) {
-    console.error('Error clearing expired cache:', error)
+    console.error('💥 CACHE: Error clearing expired cache:', error)
     return false
   }
 }
@@ -138,6 +156,10 @@ export async function clearExpiredCache() {
  */
 export async function getCacheStats() {
   try {
+    console.log('📊 CACHE: Getting cache statistics...')
+    
+    const currentTime = new Date().toISOString()
+    
     const { data: totalCount, error: totalError } = await supabase
       .from('api_cache')
       .select('id', { count: 'exact', head: true })
@@ -145,21 +167,24 @@ export async function getCacheStats() {
     const { data: expiredCount, error: expiredError } = await supabase
       .from('api_cache')
       .select('id', { count: 'exact', head: true })
-      .lt('expires_at', new Date().toISOString())
+      .lt('expires_at', currentTime)
     
     if (totalError || expiredError) {
-      console.warn('Error getting cache stats:', totalError || expiredError)
+      console.warn('⚠️ CACHE: Error getting cache stats:', totalError || expiredError)
       return null
     }
     
-    return {
+    const stats = {
       total: totalCount || 0,
       expired: expiredCount || 0,
       active: (totalCount || 0) - (expiredCount || 0)
     }
     
+    console.log('📊 CACHE: Statistics:', stats)
+    return stats
+    
   } catch (error) {
-    console.error('Error getting cache statistics:', error)
+    console.error('💥 CACHE: Error getting cache statistics:', error)
     return null
   }
 }
@@ -169,23 +194,57 @@ export async function getCacheStats() {
  */
 export async function clearAllCache() {
   try {
-    console.log('Clearing all cache entries...')
+    console.log('🧹 CACHE: Starting to clear ALL cache entries...')
     
-    const { error, count } = await supabase
+    // First, get count of all entries
+    const { data: allEntries, error: countError } = await supabase
       .from('api_cache')
-      .delete()
-      .neq('id', 0) // Delete all records
+      .select('id, cache_key, expires_at')
     
-    if (error) {
-      console.error('Error clearing all cache:', error)
+    if (countError) {
+      console.error('💥 CACHE: Error getting cache entries for clearing:', countError)
       return false
     }
     
-    console.log(`Cleared ${count || 0} cache entries`)
+    console.log(`📊 CACHE: Found ${allEntries?.length || 0} total cache entries to delete`)
+    if (allEntries && allEntries.length > 0) {
+      console.log('🗑️ CACHE: All entries to be deleted:', allEntries.map(e => ({ 
+        key: e.cache_key, 
+        expires: e.expires_at,
+        expired: new Date(e.expires_at) < new Date()
+      })))
+    }
+    
+    // Delete all records using a condition that matches all records
+    const { error, count } = await supabase
+      .from('api_cache')
+      .delete()
+      .gte('id', 0) // This should match all records since id is always >= 0
+    
+    if (error) {
+      console.error('💥 CACHE: Error clearing all cache:', error)
+      
+      // Try alternative deletion method
+      console.log('🔄 CACHE: Trying alternative deletion method...')
+      const { error: altError, count: altCount } = await supabase
+        .from('api_cache')
+        .delete()
+        .not('id', 'is', null) // Alternative way to match all records
+      
+      if (altError) {
+        console.error('💥 CACHE: Alternative deletion also failed:', altError)
+        return false
+      }
+      
+      console.log(`✅ CACHE: Alternative method cleared ${altCount || 0} cache entries`)
+      return true
+    }
+    
+    console.log(`✅ CACHE: Successfully cleared ${count || 0} cache entries`)
     return true
     
   } catch (error) {
-    console.error('Error clearing all cache:', error)
+    console.error('💥 CACHE: Error clearing all cache:', error)
     return false
   }
 }

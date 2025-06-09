@@ -20,6 +20,19 @@ export class RecommendationEngine {
     this.minMarketCap = 1000000000 // $1B minimum market cap for liquidity
     this.minVolume = 10 // Minimum daily volume for options
     this.minOpenInterest = 50 // Minimum open interest for options
+    
+    console.log('🚀 RECOMMENDATION_ENGINE: Initialized with criteria:', {
+      minDelta: this.minDelta,
+      minPremiumPercentage: this.minPremiumPercentage,
+      minPOP: this.minPOP,
+      maxPOP: this.maxPOP,
+      maxDaysToExpiry: this.maxDaysToExpiry,
+      minDaysToExpiry: this.minDaysToExpiry,
+      maxSymbolsToProcess: this.maxSymbolsToProcess,
+      minMarketCap: this.minMarketCap,
+      minVolume: this.minVolume,
+      minOpenInterest: this.minOpenInterest
+    })
   }
 
   /**
@@ -29,31 +42,42 @@ export class RecommendationEngine {
    */
   async generateRecommendations() {
     try {
-      console.log('Starting recommendation generation with expanded stock universe...')
+      console.log('🚀 RECOMMENDATION_ENGINE: Starting recommendation generation with expanded stock universe...')
       
       // Check for cached recommendations first
       const cachedRecommendations = await this.getCachedRecommendations()
       if (cachedRecommendations.length > 0) {
-        console.log(`Found ${cachedRecommendations.length} cached recommendations`)
+        console.log(`✅ RECOMMENDATION_ENGINE: Found ${cachedRecommendations.length} cached recommendations`)
       }
       
       // Step 1: Get earnings calendar with extended date range for broader coverage
       let earningsData
       try {
+        console.log('📅 RECOMMENDATION_ENGINE: Step 1 - Fetching earnings calendar...')
         earningsData = await getEarningsCalendar(null, null, true) // Use extended range
-        console.log(`Found ${earningsData.length} companies with upcoming earnings (expanded universe)`)
+        console.log(`📊 RECOMMENDATION_ENGINE: Found ${earningsData.length} companies with upcoming earnings (expanded universe)`)
+        
+        if (earningsData.length > 0) {
+          console.log('📊 RECOMMENDATION_ENGINE: Sample earnings data:', earningsData.slice(0, 5).map(e => ({
+            symbol: e.symbol,
+            date: e.date,
+            epsGrowth: e.epsGrowth,
+            marketCap: e.marketCap
+          })))
+        }
+        
       } catch (error) {
-        console.error('Error fetching earnings data:', error)
+        console.error('💥 RECOMMENDATION_ENGINE: Error fetching earnings data:', error)
         
         // If earnings fetch fails due to rate limits, use cached recommendations
         if (error.message.includes('rate limit') || error.message.includes('429')) {
-          console.warn('Rate limit hit, using cached recommendations')
+          console.warn('⚠️ RECOMMENDATION_ENGINE: Rate limit hit, using cached recommendations')
           return cachedRecommendations
         }
         
         // For other errors, still try cached recommendations
         if (cachedRecommendations.length > 0) {
-          console.warn('Using cached recommendations due to earnings API error')
+          console.warn('⚠️ RECOMMENDATION_ENGINE: Using cached recommendations due to earnings API error')
           return cachedRecommendations
         }
         
@@ -61,63 +85,79 @@ export class RecommendationEngine {
       }
       
       if (earningsData.length === 0) {
-        console.log('No earnings found for the current period, using cached recommendations')
+        console.log('❌ RECOMMENDATION_ENGINE: No earnings found for the current period, using cached recommendations')
         return cachedRecommendations
       }
       
       // Step 2: Filter and prioritize symbols for processing
+      console.log('🔧 RECOMMENDATION_ENGINE: Step 2 - Prioritizing symbols...')
       const prioritizedSymbols = this.prioritizeSymbols(earningsData)
-      console.log(`Prioritized ${prioritizedSymbols.length} symbols for options analysis`)
+      console.log(`📊 RECOMMENDATION_ENGINE: Prioritized ${prioritizedSymbols.length} symbols for options analysis`)
       
       // Step 3: Process symbols in batches to avoid overwhelming APIs
+      console.log('🔧 RECOMMENDATION_ENGINE: Step 3 - Processing symbols in batches...')
       const recommendations = []
       const batchSize = 10 // Process 10 symbols at a time
       
       for (let i = 0; i < prioritizedSymbols.length; i += batchSize) {
         const batch = prioritizedSymbols.slice(i, i + batchSize)
-        console.log(`Processing batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(prioritizedSymbols.length / batchSize)} (${batch.length} symbols)`)
+        console.log(`🔧 RECOMMENDATION_ENGINE: Processing batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(prioritizedSymbols.length / batchSize)} (${batch.length} symbols):`, batch)
         
         try {
           const batchRecommendations = await this.processBatch(batch, earningsData)
           recommendations.push(...batchRecommendations)
           
+          console.log(`✅ RECOMMENDATION_ENGINE: Batch ${Math.floor(i / batchSize) + 1} complete: ${batchRecommendations.length} recommendations`)
+          
           // Add delay between batches to respect rate limits
           if (i + batchSize < prioritizedSymbols.length) {
             const delay = 3000 + Math.random() * 2000 // 3-5 second delay
-            console.log(`Waiting ${Math.round(delay)}ms before next batch...`)
+            console.log(`⏳ RECOMMENDATION_ENGINE: Waiting ${Math.round(delay)}ms before next batch...`)
             await new Promise(resolve => setTimeout(resolve, delay))
           }
           
         } catch (error) {
-          console.error(`Error processing batch starting at index ${i}:`, error)
+          console.error(`💥 RECOMMENDATION_ENGINE: Error processing batch starting at index ${i}:`, error)
           // Continue with next batch instead of failing completely
         }
       }
       
       // Step 4: Sort by confidence score and return top recommendations
+      console.log('🔧 RECOMMENDATION_ENGINE: Step 4 - Sorting and finalizing recommendations...')
       const sortedRecommendations = recommendations
         .sort((a, b) => b.confidence_score - a.confidence_score)
         .slice(0, 30) // Increased from 20 to 30 recommendations
       
-      console.log(`Generated ${sortedRecommendations.length} new recommendations from expanded stock universe`)
+      console.log(`✅ RECOMMENDATION_ENGINE: Generated ${sortedRecommendations.length} new recommendations from expanded stock universe`)
+      
+      if (sortedRecommendations.length > 0) {
+        console.log('📊 RECOMMENDATION_ENGINE: Top 5 recommendations:', sortedRecommendations.slice(0, 5).map(r => ({
+          symbol: r.symbol,
+          strike: r.strike_price,
+          confidence: r.confidence_score,
+          pop: r.pop,
+          premium: r.premium
+        })))
+      }
       
       // Step 5: Save to database if we have new recommendations
       if (sortedRecommendations.length > 0) {
+        console.log('💾 RECOMMENDATION_ENGINE: Step 5 - Saving recommendations to database...')
         await this.saveRecommendations(sortedRecommendations)
         return sortedRecommendations
       } else {
         // If no new recommendations generated, return cached ones
-        console.log('No new recommendations generated, using cached recommendations')
+        console.log('⚠️ RECOMMENDATION_ENGINE: No new recommendations generated, using cached recommendations')
         return cachedRecommendations
       }
       
     } catch (error) {
-      console.error('Error generating recommendations:', error)
+      console.error('💥 RECOMMENDATION_ENGINE: Error generating recommendations:', error)
       
       // Always try to return cached recommendations as fallback
       const fallbackRecommendations = await this.getCachedRecommendations()
       if (fallbackRecommendations.length > 0) {
-        console.log(`Returning ${fallbackRecommendations.length} cached recommendations as fallback`)
+        console.log(`🔄 RECOMMENDATION_ENGINE: Returning ${fallbackRecommendations.length} cached recommendations as fallback`)
         return fallbackRecommendations
       }
       
@@ -131,29 +171,36 @@ export class RecommendationEngine {
    * @returns {Array} Prioritized symbol list
    */
   prioritizeSymbols(earningsData) {
+    console.log('🔧 RECOMMENDATION_ENGINE: Starting symbol prioritization...')
+    
     // Filter and score symbols
     const scoredSymbols = earningsData
       .filter(earning => {
         // Basic validation
         if (!earning.symbol || earning.symbol.length < 1 || earning.symbol.length > 5) {
+          console.log(`❌ RECOMMENDATION_ENGINE: Filtered out ${earning.symbol} - invalid length`)
           return false
         }
         
         // Exclude symbols with special characters (usually not optionable)
         if (earning.symbol.includes('.') || earning.symbol.includes('-') || earning.symbol.includes('/')) {
+          console.log(`❌ RECOMMENDATION_ENGINE: Filtered out ${earning.symbol} - special characters`)
           return false
         }
         
         // Exclude symbols with numbers (usually not optionable)
         if (/\d/.test(earning.symbol)) {
+          console.log(`❌ RECOMMENDATION_ENGINE: Filtered out ${earning.symbol} - contains numbers`)
           return false
         }
         
         // Market cap filter (if available)
         if (earning.marketCap && earning.marketCap < this.minMarketCap) {
+          console.log(`❌ RECOMMENDATION_ENGINE: Filtered out ${earning.symbol} - market cap too low: ${earning.marketCap}`)
           return false
         }
         
+        console.log(`✅ RECOMMENDATION_ENGINE: ${earning.symbol} passed basic filtering`)
         return true
       })
       .map(earning => {
@@ -184,6 +231,8 @@ export class RecommendationEngine {
           score += 30 // Bonus for known liquid stocks
         }
         
+        console.log(`📊 RECOMMENDATION_ENGINE: Scored ${earning.symbol}: ${score.toFixed(1)}`)
+        
         return {
           symbol: earning.symbol,
           score: score,
@@ -193,7 +242,7 @@ export class RecommendationEngine {
       .sort((a, b) => b.score - a.score) // Sort by score descending
       .slice(0, this.maxSymbolsToProcess) // Take top N symbols
     
-    console.log(`Symbol prioritization complete. Top 10 symbols:`)
+    console.log(`📊 RECOMMENDATION_ENGINE: Symbol prioritization complete. Top 10 symbols:`)
     scoredSymbols.slice(0, 10).forEach((item, index) => {
       console.log(`${index + 1}. ${item.symbol} (score: ${item.score.toFixed(1)})`)
     })
@@ -208,35 +257,57 @@ export class RecommendationEngine {
    * @returns {Array} Recommendations from this batch
    */
   async processBatch(symbols, earningsData) {
+    console.log(`🔧 RECOMMENDATION_ENGINE: Processing batch of ${symbols.length} symbols:`, symbols)
+    
     const recommendations = []
     
     try {
       // Get options data for the batch
+      console.log('📊 RECOMMENDATION_ENGINE: Fetching options data for batch...')
       const optionsData = await getMultipleOptionsChains(symbols)
+      
+      console.log(`📊 RECOMMENDATION_ENGINE: Options data received:`, {
+        successCount: Object.keys(optionsData.results).length,
+        errorCount: optionsData.errors.length,
+        successSymbols: Object.keys(optionsData.results),
+        errorSymbols: optionsData.errors.map(e => e.symbol)
+      })
       
       // Process each symbol in the batch
       for (const symbol of symbols) {
         try {
+          console.log(`🔧 RECOMMENDATION_ENGINE: Processing ${symbol}...`)
+          
           const earnings = earningsData.find(e => e.symbol === symbol)
           const options = optionsData.results[symbol]
           
-          if (!earnings || !options || !options.options) {
-            console.log(`Skipping ${symbol}: missing earnings or options data`)
+          if (!earnings) {
+            console.log(`❌ RECOMMENDATION_ENGINE: Skipping ${symbol} - no earnings data`)
             continue
           }
+          
+          if (!options || !options.options) {
+            console.log(`❌ RECOMMENDATION_ENGINE: Skipping ${symbol} - no options data`)
+            continue
+          }
+          
+          console.log(`📊 RECOMMENDATION_ENGINE: ${symbol} has ${options.options.length} options to analyze`)
           
           const symbolRecommendations = await this.processSymbol(symbol, earnings, options)
           recommendations.push(...symbolRecommendations)
           
+          console.log(`✅ RECOMMENDATION_ENGINE: ${symbol} generated ${symbolRecommendations.length} recommendations`)
+          
         } catch (error) {
-          console.error(`Error processing ${symbol}:`, error)
+          console.error(`💥 RECOMMENDATION_ENGINE: Error processing ${symbol}:`, error)
         }
       }
       
     } catch (error) {
-      console.error('Error processing batch:', error)
+      console.error('💥 RECOMMENDATION_ENGINE: Error processing batch:', error)
     }
     
+    console.log(`✅ RECOMMENDATION_ENGINE: Batch processing complete: ${recommendations.length} total recommendations`)
     return recommendations
   }
 
@@ -248,22 +319,34 @@ export class RecommendationEngine {
    * @returns {Array} Recommendations for this symbol
    */
   async processSymbol(symbol, earnings, options) {
+    console.log(`🔧 RECOMMENDATION_ENGINE: Processing symbol ${symbol}`)
+    
     const recommendations = []
     const stockPrice = options.underlyingPrice
     
     if (!stockPrice || stockPrice <= 0) {
-      console.log(`Skipping ${symbol}: invalid stock price`)
+      console.log(`❌ RECOMMENDATION_ENGINE: Skipping ${symbol} - invalid stock price: ${stockPrice}`)
       return recommendations
     }
     
-    console.log(`Processing ${symbol}: stock price $${stockPrice}, ${options.options.length} options`)
+    console.log(`📈 RECOMMENDATION_ENGINE: Processing ${symbol}: stock price $${stockPrice}, ${options.options.length} options`)
+    
+    let optionsAnalyzed = 0
+    let optionsPassedBasic = 0
+    let optionsPassedPOP = 0
     
     for (const option of options.options) {
       try {
+        optionsAnalyzed++
+        
         // Filter by basic criteria (same rigorous filtering as before)
         if (!this.meetsBasicCriteria(option, stockPrice, earnings.date)) {
+          console.log(`❌ RECOMMENDATION_ENGINE: ${symbol} option (strike: ${option.strike}, exp: ${option.expiration}) failed basic criteria`)
           continue
         }
+        
+        optionsPassedBasic++
+        console.log(`✅ RECOMMENDATION_ENGINE: ${symbol} option (strike: ${option.strike}) passed basic criteria`)
         
         // Calculate additional metrics
         const timeToExpiry = calculateTimeToExpiry(option.expiration)
@@ -275,10 +358,15 @@ export class RecommendationEngine {
           option.impliedVolatility
         )
         
+        console.log(`📊 RECOMMENDATION_ENGINE: ${symbol} option POP calculation: ${pop.toFixed(1)}% (target: ${this.minPOP}-${this.maxPOP}%)`)
+        
         // Check if POP is within target range (same criteria)
         if (pop < this.minPOP || pop > this.maxPOP) {
+          console.log(`❌ RECOMMENDATION_ENGINE: ${symbol} option failed POP criteria: ${pop.toFixed(1)}%`)
           continue
         }
+        
+        optionsPassedPOP++
         
         const premiumPercentage = calculatePremiumPercentage(option.premium, stockPrice)
         const breakeven = calculateBreakeven(option.strike, option.premium)
@@ -293,6 +381,8 @@ export class RecommendationEngine {
           pop,
           premiumPercentage
         )
+        
+        console.log(`📊 RECOMMENDATION_ENGINE: ${symbol} option confidence score: ${confidenceScore.toFixed(1)}%`)
         
         const recommendation = {
           symbol: symbol,
@@ -315,14 +405,27 @@ export class RecommendationEngine {
           is_active: true
         }
         
+        console.log(`✅ RECOMMENDATION_ENGINE: Created recommendation for ${symbol}:`, {
+          strike: recommendation.strike_price,
+          premium: recommendation.premium,
+          confidence: recommendation.confidence_score,
+          pop: recommendation.pop
+        })
+        
         recommendations.push(recommendation)
         
       } catch (error) {
-        console.error(`Error processing option for ${symbol}:`, error)
+        console.error(`💥 RECOMMENDATION_ENGINE: Error processing option for ${symbol}:`, error)
       }
     }
     
-    console.log(`Generated ${recommendations.length} recommendations for ${symbol}`)
+    console.log(`📊 RECOMMENDATION_ENGINE: ${symbol} filtering summary:`, {
+      optionsAnalyzed,
+      optionsPassedBasic,
+      optionsPassedPOP,
+      finalRecommendations: recommendations.length
+    })
+    
     return recommendations
   }
 
@@ -336,12 +439,14 @@ export class RecommendationEngine {
   meetsBasicCriteria(option, stockPrice, earningsDate) {
     // Check delta (same criteria)
     if (Math.abs(option.delta) > this.minDelta) {
+      console.log(`❌ RECOMMENDATION_ENGINE: Delta too high: ${Math.abs(option.delta)} > ${this.minDelta}`)
       return false
     }
     
     // Check premium percentage (same criteria)
     const premiumPercentage = calculatePremiumPercentage(option.premium, stockPrice)
     if (premiumPercentage < this.minPremiumPercentage) {
+      console.log(`❌ RECOMMENDATION_ENGINE: Premium percentage too low: ${premiumPercentage.toFixed(2)}% < ${this.minPremiumPercentage}%`)
       return false
     }
     
@@ -351,6 +456,7 @@ export class RecommendationEngine {
     )
     
     if (daysToExpiry < this.minDaysToExpiry || daysToExpiry > this.maxDaysToExpiry) {
+      console.log(`❌ RECOMMENDATION_ENGINE: Days to expiry out of range: ${daysToExpiry} (range: ${this.minDaysToExpiry}-${this.maxDaysToExpiry})`)
       return false
     }
     
@@ -359,19 +465,23 @@ export class RecommendationEngine {
     const earningsDateObj = new Date(earningsDate)
     
     if (expiryDate <= earningsDateObj) {
+      console.log(`❌ RECOMMENDATION_ENGINE: Expiration before earnings: ${option.expiration} <= ${earningsDate}`)
       return false
     }
     
     // Check minimum volume and open interest (same criteria)
     if (option.volume < this.minVolume || option.openInterest < this.minOpenInterest) {
+      console.log(`❌ RECOMMENDATION_ENGINE: Volume/OI too low: vol=${option.volume} (min=${this.minVolume}), OI=${option.openInterest} (min=${this.minOpenInterest})`)
       return false
     }
     
     // Check if premium is reasonable (same criteria)
     if (option.premium <= 0 || option.premium > stockPrice * 0.1) {
+      console.log(`❌ RECOMMENDATION_ENGINE: Premium unreasonable: ${option.premium} (stock: ${stockPrice})`)
       return false
     }
     
+    console.log(`✅ RECOMMENDATION_ENGINE: Option passed all basic criteria`)
     return true
   }
 
@@ -381,6 +491,8 @@ export class RecommendationEngine {
    */
   async getCachedRecommendations() {
     try {
+      console.log('🔍 RECOMMENDATION_ENGINE: Fetching cached recommendations from database...')
+      
       const { data, error } = await supabase
         .from('recommendations')
         .select('*')
@@ -389,14 +501,15 @@ export class RecommendationEngine {
         .limit(30) // Increased from 20 to 30
       
       if (error) {
-        console.warn('Error fetching cached recommendations:', error)
+        console.warn('⚠️ RECOMMENDATION_ENGINE: Error fetching cached recommendations:', error)
         return []
       }
       
+      console.log(`✅ RECOMMENDATION_ENGINE: Found ${data?.length || 0} cached recommendations`)
       return data || []
       
     } catch (error) {
-      console.error('Error fetching cached recommendations:', error)
+      console.error('💥 RECOMMENDATION_ENGINE: Error fetching cached recommendations:', error)
       return []
     }
   }
@@ -407,6 +520,8 @@ export class RecommendationEngine {
    */
   async saveRecommendations(recommendations) {
     try {
+      console.log(`💾 RECOMMENDATION_ENGINE: Saving ${recommendations.length} recommendations to database...`)
+      
       // First, mark all existing recommendations as inactive
       const { error: updateError } = await supabase
         .from('recommendations')
@@ -414,7 +529,9 @@ export class RecommendationEngine {
         .eq('is_active', true)
       
       if (updateError) {
-        console.warn('Error deactivating old recommendations:', updateError)
+        console.warn('⚠️ RECOMMENDATION_ENGINE: Error deactivating old recommendations:', updateError)
+      } else {
+        console.log('✅ RECOMMENDATION_ENGINE: Deactivated old recommendations')
       }
       
       // Insert new recommendations
@@ -424,25 +541,26 @@ export class RecommendationEngine {
           .insert(recommendations)
         
         if (insertError) {
-          console.error('Error saving recommendations:', insertError)
+          console.error('💥 RECOMMENDATION_ENGINE: Error saving recommendations:', insertError)
           throw insertError
         }
         
-        console.log(`Saved ${recommendations.length} recommendations to database`)
+        console.log(`✅ RECOMMENDATION_ENGINE: Saved ${recommendations.length} recommendations to database`)
         
         // Cache the recommendations as well
         await setCachedData('latest_recommendations', recommendations, 60) // Cache for 1 hour
+        console.log('✅ RECOMMENDATION_ENGINE: Cached recommendations for 1 hour')
       }
       
     } catch (error) {
-      console.error('Error saving recommendations to database:', error)
+      console.error('💥 RECOMMENDATION_ENGINE: Error saving recommendations to database:', error)
       
       // Even if database save fails, cache the recommendations
       try {
         await setCachedData('latest_recommendations', recommendations, 60)
-        console.log('Cached recommendations despite database error')
+        console.log('✅ RECOMMENDATION_ENGINE: Cached recommendations despite database error')
       } catch (cacheError) {
-        console.error('Failed to cache recommendations:', cacheError)
+        console.error('💥 RECOMMENDATION_ENGINE: Failed to cache recommendations:', cacheError)
       }
       
       throw error
@@ -454,6 +572,8 @@ export class RecommendationEngine {
    * @param {Object} criteria - New criteria
    */
   updateCriteria(criteria) {
+    console.log('🔧 RECOMMENDATION_ENGINE: Updating filtering criteria:', criteria)
+    
     if (criteria.minDelta !== undefined) this.minDelta = criteria.minDelta
     if (criteria.minPremiumPercentage !== undefined) this.minPremiumPercentage = criteria.minPremiumPercentage
     if (criteria.minPOP !== undefined) this.minPOP = criteria.minPOP
@@ -463,7 +583,7 @@ export class RecommendationEngine {
     if (criteria.maxSymbolsToProcess !== undefined) this.maxSymbolsToProcess = criteria.maxSymbolsToProcess
     if (criteria.minMarketCap !== undefined) this.minMarketCap = criteria.minMarketCap
     
-    console.log('Updated filtering criteria for expanded stock universe:', {
+    console.log('✅ RECOMMENDATION_ENGINE: Updated filtering criteria for expanded stock universe:', {
       minDelta: this.minDelta,
       minPremiumPercentage: this.minPremiumPercentage,
       minPOP: this.minPOP,
