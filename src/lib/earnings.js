@@ -90,10 +90,11 @@ function getExtendedDateRange() {
  * @param {string} fromDate - Start date (YYYY-MM-DD)
  * @param {string} toDate - End date (YYYY-MM-DD)
  * @param {boolean} expandedRange - Whether to use extended date range for broader coverage
+ * @param {boolean} forceRefresh - Whether to bypass cache entirely
  * @returns {Promise<Array>} Earnings calendar data
  */
-export async function getEarningsCalendar(fromDate = null, toDate = null, expandedRange = true) {
-  console.log('📅 EARNINGS: Starting getEarningsCalendar...', { fromDate, toDate, expandedRange })
+export async function getEarningsCalendar(fromDate = null, toDate = null, expandedRange = true, forceRefresh = false) {
+  console.log('📅 EARNINGS: Starting getEarningsCalendar...', { fromDate, toDate, expandedRange, forceRefresh })
   
   // Use extended range for broader stock coverage if no dates provided
   if (!fromDate || !toDate) {
@@ -114,11 +115,16 @@ export async function getEarningsCalendar(fromDate = null, toDate = null, expand
   const cacheKey = `fmp_earnings_${fromDate}_${toDate}${expandedRange ? '_extended' : ''}`
   console.log(`🔍 EARNINGS: Cache key: ${cacheKey}`)
   
-  // Check cache first (longer cache for FMP data)
-  let cachedData = await getCachedData(cacheKey)
-  if (cachedData) {
-    console.log(`✅ EARNINGS: Using cached earnings calendar for ${fromDate} to ${toDate} (${cachedData.length} companies)`)
-    return cachedData
+  // Check cache first (unless force refresh)
+  if (!forceRefresh) {
+    let cachedData = await getCachedData(cacheKey)
+    if (cachedData) {
+      console.log(`✅ EARNINGS: Using cached earnings calendar for ${fromDate} to ${toDate} (${cachedData.length} companies)`)
+      console.log('📊 EARNINGS: Cached data sample:', cachedData.slice(0, 3).map(d => ({ symbol: d.symbol, date: d.date })))
+      return cachedData
+    }
+  } else {
+    console.log('🔄 EARNINGS: Force refresh - bypassing cache')
   }
   
   // Determine if we should use mock data
@@ -154,6 +160,7 @@ export async function getEarningsCalendar(fromDate = null, toDate = null, expand
   
   try {
     console.log(`🌐 EARNINGS: Fetching earnings calendar from FMP API for ${fromDate} to ${toDate} (expanded coverage)`)
+    console.log(`🌐 EARNINGS: API URL: ${FMP_BASE_URL}/earning_calendar?from=${fromDate}&to=${toDate}&apikey=${API_KEY.substring(0, 8)}...`)
     
     // Check rate limiter before making request
     await fmpLimiter.checkLimit()

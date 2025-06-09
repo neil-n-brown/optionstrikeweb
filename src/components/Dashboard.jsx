@@ -47,7 +47,7 @@ export default function Dashboard() {
   const handleClearCache = async () => {
     setClearingCache(true)
     try {
-      console.log('Clearing all cached data...')
+      console.log('🧹 DASHBOARD: Clearing all cached data...')
       
       // Clear Supabase cache
       const success = await clearAllCache()
@@ -56,10 +56,11 @@ export default function Dashboard() {
       if (typeof Storage !== 'undefined') {
         localStorage.removeItem('optionstrike_cache')
         sessionStorage.clear()
+        console.log('🧹 DASHBOARD: Cleared local storage')
       }
       
       if (success) {
-        console.log('Cache cleared successfully')
+        console.log('✅ DASHBOARD: Cache cleared successfully')
         await loadCacheStats() // Refresh cache stats
         
         // Show success message briefly
@@ -73,7 +74,7 @@ export default function Dashboard() {
       }
       
     } catch (error) {
-      console.error('Error clearing cache:', error)
+      console.error('💥 DASHBOARD: Error clearing cache:', error)
       setError(`Failed to clear cache: ${error.message}`)
     } finally {
       setClearingCache(false)
@@ -81,7 +82,7 @@ export default function Dashboard() {
   }
 
   const checkSystemHealth = async () => {
-    console.log('Checking system health...')
+    console.log('🏥 DASHBOARD: Checking system health...')
     
     try {
       // In demo mode, show demo status
@@ -110,20 +111,20 @@ export default function Dashboard() {
           { status: 'ERROR', message: fmpHealth.reason?.message || 'Connection failed' }
       })
     } catch (error) {
-      console.error('Error checking system health:', error)
+      console.error('💥 DASHBOARD: Error checking system health:', error)
     }
   }
 
-  const loadRecommendations = async () => {
+  const loadRecommendations = async (forceRefresh = false) => {
     setLoading(true)
     setError(null)
     setRateLimited(false)
     
     try {
-      console.log(`Loading recommendations in ${demoMode ? 'demo' : 'full'} mode...`)
+      console.log(`🔄 DASHBOARD: Loading recommendations in ${demoMode ? 'demo' : 'full'} mode... (forceRefresh: ${forceRefresh})`)
       
       if (demoMode) {
-        console.log('Using mock recommendations (demo mode)')
+        console.log('🎭 DASHBOARD: Using mock recommendations (demo mode)')
         // Simulate loading delay for demo
         await new Promise(resolve => setTimeout(resolve, 1500))
         setRecommendations(mockRecommendations)
@@ -133,7 +134,7 @@ export default function Dashboard() {
       }
       
       // Full mode: Try to load from Supabase first
-      console.log('Attempting to load from Supabase...')
+      console.log('📊 DASHBOARD: Attempting to load from Supabase...')
       const { data, error: supabaseError } = await supabase
         .from('recommendations')
         .select('*')
@@ -141,24 +142,24 @@ export default function Dashboard() {
         .order('confidence_score', { ascending: false })
       
       if (supabaseError) {
-        console.warn('Supabase query failed:', supabaseError)
+        console.warn('⚠️ DASHBOARD: Supabase query failed:', supabaseError)
         throw new Error(`Database error: ${supabaseError.message}`)
       } 
       
       if (data && data.length > 0) {
-        console.log(`Loaded ${data.length} recommendations from Supabase`)
+        console.log(`✅ DASHBOARD: Loaded ${data.length} recommendations from Supabase`)
         setRecommendations(data)
         setHasLoadedOnce(true)
         setLastUpdate(new Date())
       } else {
-        console.log('No recommendations in database, showing empty state')
+        console.log('❌ DASHBOARD: No recommendations in database, showing empty state')
         setRecommendations([])
         setHasLoadedOnce(true)
         setLastUpdate(new Date())
       }
       
     } catch (err) {
-      console.error('Error loading recommendations:', err)
+      console.error('💥 DASHBOARD: Error loading recommendations:', err)
       setError(err.message)
       
       // Check if error is rate limit related
@@ -172,17 +173,17 @@ export default function Dashboard() {
     }
   }
 
-  const generateNewRecommendations = async () => {
+  const generateNewRecommendations = async (forceRefresh = false) => {
     setIsGenerating(true)
     setError(null)
     setRateLimited(false)
     
     try {
-      console.log(`Generating new recommendations in ${demoMode ? 'demo' : 'full'} mode...`)
+      console.log(`🚀 DASHBOARD: Generating new recommendations in ${demoMode ? 'demo' : 'full'} mode... (forceRefresh: ${forceRefresh})`)
       
       if (demoMode) {
         // In demo mode, just refresh the mock data
-        console.log('Refreshing mock recommendations (demo mode)')
+        console.log('🎭 DASHBOARD: Refreshing mock recommendations (demo mode)')
         await new Promise(resolve => setTimeout(resolve, 2000)) // Simulate generation time
         setRecommendations(mockRecommendations)
         setLastUpdate(new Date())
@@ -191,14 +192,21 @@ export default function Dashboard() {
       }
       
       // Full mode: Use the recommendation engine
-      console.log('Using recommendation engine to generate new recommendations...')
+      console.log('🚀 DASHBOARD: Using recommendation engine to generate new recommendations...')
+      
+      // If force refresh, clear cache first
+      if (forceRefresh) {
+        console.log('🧹 DASHBOARD: Force refresh - clearing cache first...')
+        await clearAllCache()
+      }
+      
       const newRecommendations = await recommendationEngine.generateRecommendations()
       
       if (newRecommendations.length > 0) {
         setRecommendations(newRecommendations)
         setLastUpdate(new Date())
         setHasLoadedOnce(true)
-        console.log(`Generated ${newRecommendations.length} new recommendations`)
+        console.log(`✅ DASHBOARD: Generated ${newRecommendations.length} new recommendations`)
       } else {
         setError('No recommendations could be generated with current market conditions')
         setRecommendations([])
@@ -206,7 +214,7 @@ export default function Dashboard() {
       }
       
     } catch (err) {
-      console.error('Error generating recommendations:', err)
+      console.error('💥 DASHBOARD: Error generating recommendations:', err)
       
       // Check if error is rate limit related
       if (err.message.includes('rate limit') || err.message.includes('429') || err.message.includes('Limit Reach')) {
@@ -242,8 +250,20 @@ export default function Dashboard() {
     await loadRecommendations()
   }
 
+  const handleForceRefresh = async () => {
+    console.log('🔄 DASHBOARD: Force refresh triggered - bypassing all cache')
+    
+    // Check system health if in full mode
+    if (!demoMode) {
+      await checkSystemHealth()
+    }
+    
+    // Generate new recommendations with force refresh
+    await generateNewRecommendations(true)
+  }
+
   const handleModeToggle = (isDemoMode) => {
-    console.log(`Switching to ${isDemoMode ? 'demo' : 'full'} mode`)
+    console.log(`🔄 DASHBOARD: Switching to ${isDemoMode ? 'demo' : 'full'} mode`)
     
     setDemoMode(isDemoMode)
     setRecommendations([]) // Clear current recommendations
@@ -319,20 +339,40 @@ export default function Dashboard() {
                 
                 <div className="flex space-x-2">
                   {hasLoadedOnce && (
-                    <button 
-                      onClick={handleRefresh}
-                      className="bg-corporate-600 text-white px-4 py-2 rounded-lg hover:bg-corporate-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                      disabled={loading || isGenerating}
-                    >
-                      {loading ? (
-                        <div className="flex items-center space-x-2">
-                          <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                          <span>Loading...</span>
-                        </div>
-                      ) : (
-                        'Refresh'
+                    <>
+                      <button 
+                        onClick={handleRefresh}
+                        className="bg-corporate-600 text-white px-4 py-2 rounded-lg hover:bg-corporate-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        disabled={loading || isGenerating}
+                      >
+                        {loading ? (
+                          <div className="flex items-center space-x-2">
+                            <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                            <span>Loading...</span>
+                          </div>
+                        ) : (
+                          'Refresh'
+                        )}
+                      </button>
+                      
+                      {!demoMode && (
+                        <button 
+                          onClick={handleForceRefresh}
+                          className="bg-yellow-600 text-white px-4 py-2 rounded-lg hover:bg-yellow-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                          disabled={loading || isGenerating}
+                          title="Bypass all cache and make fresh API calls"
+                        >
+                          {isGenerating ? (
+                            <div className="flex items-center space-x-2">
+                              <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                              <span>Fresh...</span>
+                            </div>
+                          ) : (
+                            'Force Fresh'
+                          )}
+                        </button>
                       )}
-                    </button>
+                    </>
                   )}
                   
                   <button 
@@ -371,8 +411,8 @@ export default function Dashboard() {
             <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
               <div className="flex">
                 <div className="flex-shrink-0">
-                  <svg className="h-5 w-5 text-blue-400\" viewBox="0 0 20 20\" fill="currentColor">
-                    <path fillRule="evenodd\" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z\" clipRule="evenodd" />
+                  <svg className="h-5 w-5 text-blue-400" viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
                   </svg>
                 </div>
                 <div className="ml-3">
@@ -394,8 +434,8 @@ export default function Dashboard() {
             <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
               <div className="flex">
                 <div className="flex-shrink-0">
-                  <svg className="h-5 w-5 text-blue-400\" viewBox="0 0 20 20\" fill="currentColor">
-                    <path fillRule="evenodd\" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z\" clipRule="evenodd" />
+                  <svg className="h-5 w-5 text-blue-400" viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
                   </svg>
                 </div>
                 <div className="ml-3">
@@ -449,8 +489,8 @@ export default function Dashboard() {
               <div className="flex">
                 <div className="flex-shrink-0">
                   {error.includes('successfully') ? (
-                    <svg className="h-5 w-5 text-green-400\" viewBox="0 0 20 20\" fill="currentColor">
-                      <path fillRule="evenodd\" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z\" clipRule="evenodd" />
+                    <svg className="h-5 w-5 text-green-400" viewBox="0 0 20 20" fill="currentColor">
+                      <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
                     </svg>
                   ) : (
                     <svg className="h-5 w-5 text-red-400" viewBox="0 0 20 20" fill="currentColor">
