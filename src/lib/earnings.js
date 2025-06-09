@@ -8,12 +8,16 @@ const API_KEY = import.meta.env.VITE_FMP_API_KEY
 const USE_MOCK_DATA = import.meta.env.VITE_USE_MOCK_DATA === 'true'
 const CACHE_EARNINGS_MINUTES = parseInt(import.meta.env.VITE_CACHE_EARNINGS_MINUTES) || 240 // 4 hours default
 
-// Create FMP API client with enhanced error handling
-const fmpClient = new APIClient(
-  FMP_BASE_URL,
-  {},
-  fmpLimiter
-)
+// Create FMP API client only if API key is available
+let fmpClient = null
+
+if (API_KEY) {
+  fmpClient = new APIClient(
+    FMP_BASE_URL,
+    {},
+    fmpLimiter
+  )
+}
 
 /**
  * Gets current week date range
@@ -77,8 +81,8 @@ export async function getEarningsCalendar(fromDate = null, toDate = null) {
     return cachedData
   }
   
-  // Use mock data if enabled
-  if (USE_MOCK_DATA) {
+  // Use mock data if enabled or no API key
+  if (USE_MOCK_DATA || !API_KEY || !fmpClient) {
     console.log(`Using mock earnings calendar for ${fromDate} to ${toDate}`)
     await simulateDelay(600)
     
@@ -199,6 +203,15 @@ async function processEarningsData(rawData) {
 async function calculateEPSGrowthBatch(symbols, batchSize = 5) {
   const results = {}
   
+  // If no API key, return zeros for all symbols
+  if (!API_KEY || !fmpClient) {
+    console.log('No FMP API key, returning zero EPS growth for all symbols')
+    symbols.forEach(symbol => {
+      results[symbol] = 0
+    })
+    return results
+  }
+  
   for (let i = 0; i < symbols.length; i += batchSize) {
     const batch = symbols.slice(i, i + batchSize)
     
@@ -246,6 +259,12 @@ async function calculateEPSGrowth(symbol) {
   let cachedGrowth = await getCachedData(cacheKey)
   if (cachedGrowth !== null) {
     return cachedGrowth
+  }
+  
+  // If no API key, return 0
+  if (!API_KEY || !fmpClient) {
+    await setCachedData(cacheKey, 0, 1440) // Cache 0 for 24 hours
+    return 0
   }
   
   try {
@@ -303,8 +322,8 @@ export async function getCompanyProfile(symbol) {
     return cachedData
   }
   
-  // Use mock data if enabled
-  if (USE_MOCK_DATA) {
+  // Use mock data if enabled or no API key
+  if (USE_MOCK_DATA || !API_KEY || !fmpClient) {
     console.log(`Using mock company profile for ${symbol}`)
     await simulateDelay(400)
     
@@ -422,10 +441,33 @@ export async function getMultipleEarnings(symbols) {
  */
 export async function checkFMPAPIHealth() {
   try {
+    // If no API key, return demo status
+    if (!API_KEY) {
+      return { 
+        status: 'DEMO', 
+        message: 'Demo mode - FMP API not configured',
+        timestamp: new Date().toISOString(),
+        usage: { current: 0, max: 250, remaining: 250 },
+        details: {
+          missingApiKey: true,
+          suggestion: 'Add VITE_FMP_API_KEY to enable real data'
+        }
+      }
+    }
+    
     if (USE_MOCK_DATA) {
       return { 
-        status: 'OK', 
+        status: 'DEMO', 
         message: 'Using mock data mode',
+        timestamp: new Date().toISOString(),
+        usage: { current: 0, max: 250, remaining: 250 }
+      }
+    }
+    
+    if (!fmpClient) {
+      return {
+        status: 'ERROR',
+        message: 'FMP client not initialized',
         timestamp: new Date().toISOString(),
         usage: { current: 0, max: 250, remaining: 250 }
       }

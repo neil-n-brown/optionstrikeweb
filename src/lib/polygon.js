@@ -9,12 +9,16 @@ const USE_MOCK_DATA = import.meta.env.VITE_USE_MOCK_DATA === 'true'
 const CACHE_STOCK_MINUTES = parseInt(import.meta.env.VITE_CACHE_STOCK_MINUTES) || 5
 const CACHE_OPTIONS_MINUTES = parseInt(import.meta.env.VITE_CACHE_OPTIONS_MINUTES) || 15
 
-// Create Polygon API client
-const polygonClient = new APIClient(
-  POLYGON_BASE_URL,
-  {},
-  polygonLimiter
-)
+// Create Polygon API client only if API key is available
+let polygonClient = null
+
+if (API_KEY) {
+  polygonClient = new APIClient(
+    POLYGON_BASE_URL,
+    {},
+    polygonLimiter
+  )
+}
 
 /**
  * Fetches current stock price from Polygon API
@@ -31,8 +35,8 @@ export async function getStockPrice(symbol) {
     return cachedData
   }
   
-  // Use mock data if enabled
-  if (USE_MOCK_DATA) {
+  // Use mock data if enabled or no API key
+  if (USE_MOCK_DATA || !API_KEY || !polygonClient) {
     console.log(`Using mock stock price for ${symbol}`)
     await simulateDelay(500)
     
@@ -103,8 +107,8 @@ export async function getOptionsChain(symbol, expirationDate = null) {
     return cachedData
   }
   
-  // Use mock data if enabled
-  if (USE_MOCK_DATA) {
+  // Use mock data if enabled or no API key
+  if (USE_MOCK_DATA || !API_KEY || !polygonClient) {
     console.log(`Using mock options chain for ${symbol}`)
     await simulateDelay(800)
     
@@ -252,10 +256,33 @@ export async function getMultipleOptionsChains(symbols) {
  */
 export async function checkPolygonAPIHealth() {
   try {
+    // If no API key, return demo status
+    if (!API_KEY) {
+      return { 
+        status: 'DEMO', 
+        message: 'Demo mode - Polygon API not configured',
+        timestamp: new Date().toISOString(),
+        usage: { current: 0, max: 5, remaining: 5 },
+        details: {
+          missingApiKey: true,
+          suggestion: 'Add VITE_POLYGON_API_KEY to enable real data'
+        }
+      }
+    }
+    
     if (USE_MOCK_DATA) {
       return { 
-        status: 'OK', 
+        status: 'DEMO', 
         message: 'Using mock data mode',
+        timestamp: new Date().toISOString(),
+        usage: { current: 0, max: 5, remaining: 5 }
+      }
+    }
+    
+    if (!polygonClient) {
+      return {
+        status: 'ERROR',
+        message: 'Polygon client not initialized',
         timestamp: new Date().toISOString(),
         usage: { current: 0, max: 5, remaining: 5 }
       }

@@ -13,26 +13,36 @@ import ModeToggle from './ModeToggle'
 
 export default function Dashboard() {
   const [recommendations, setRecommendations] = useState([])
-  const [loading, setLoading] = useState(false) // No auto-loading
+  const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [lastUpdate, setLastUpdate] = useState(null)
   const [isGenerating, setIsGenerating] = useState(false)
   const [rateLimited, setRateLimited] = useState(false)
   const [demoMode, setDemoMode] = useState(true) // Start in demo mode
-  const [hasLoadedOnce, setHasLoadedOnce] = useState(false) // Track if user has loaded data
+  const [hasLoadedOnce, setHasLoadedOnce] = useState(false)
   const [systemStatus, setSystemStatus] = useState({
     supabase: { status: 'UNKNOWN', message: 'Not checked yet' },
     polygon: { status: 'UNKNOWN', message: 'Not checked yet' },
     fmp: { status: 'UNKNOWN', message: 'Not checked yet' }
   })
 
-  // NO useEffect for auto-loading - completely removed
+  // No useEffect for auto-loading - app starts completely clean
 
   const checkSystemHealth = async () => {
     console.log('Checking system health...')
     
     try {
-      // Check all systems in parallel
+      // In demo mode, show demo status
+      if (demoMode) {
+        setSystemStatus({
+          supabase: { status: 'DEMO', message: 'Demo mode - using mock data' },
+          polygon: { status: 'DEMO', message: 'Demo mode - using mock data' },
+          fmp: { status: 'DEMO', message: 'Demo mode - using mock data' }
+        })
+        return
+      }
+
+      // Check all systems in parallel for full mode
       const [supabaseHealth, polygonHealth, fmpHealth] = await Promise.allSettled([
         testConnection(),
         checkPolygonAPIHealth(),
@@ -58,19 +68,20 @@ export default function Dashboard() {
     setRateLimited(false)
     
     try {
-      console.log('Loading recommendations...')
+      console.log(`Loading recommendations in ${demoMode ? 'demo' : 'full'} mode...`)
       
       if (demoMode) {
         console.log('Using mock recommendations (demo mode)')
         // Simulate loading delay for demo
-        await new Promise(resolve => setTimeout(resolve, 1000))
+        await new Promise(resolve => setTimeout(resolve, 1500))
         setRecommendations(mockRecommendations)
         setLastUpdate(new Date())
         setHasLoadedOnce(true)
         return
       }
       
-      // Try to load from Supabase first
+      // Full mode: Try to load from Supabase first
+      console.log('Attempting to load from Supabase...')
       const { data, error: supabaseError } = await supabase
         .from('recommendations')
         .select('*')
@@ -80,17 +91,19 @@ export default function Dashboard() {
       if (supabaseError) {
         console.warn('Supabase query failed:', supabaseError)
         throw new Error(`Database error: ${supabaseError.message}`)
-      } else if (data && data.length > 0) {
+      } 
+      
+      if (data && data.length > 0) {
         console.log(`Loaded ${data.length} recommendations from Supabase`)
         setRecommendations(data)
         setHasLoadedOnce(true)
+        setLastUpdate(new Date())
       } else {
-        console.log('No recommendations in database, need to generate new ones')
+        console.log('No recommendations in database, showing empty state')
         setRecommendations([])
         setHasLoadedOnce(true)
+        setLastUpdate(new Date())
       }
-      
-      setLastUpdate(new Date())
       
     } catch (err) {
       console.error('Error loading recommendations:', err)
@@ -113,7 +126,7 @@ export default function Dashboard() {
     setRateLimited(false)
     
     try {
-      console.log('Generating new recommendations...')
+      console.log(`Generating new recommendations in ${demoMode ? 'demo' : 'full'} mode...`)
       
       if (demoMode) {
         // In demo mode, just refresh the mock data
@@ -125,6 +138,8 @@ export default function Dashboard() {
         return
       }
       
+      // Full mode: Use the recommendation engine
+      console.log('Using recommendation engine to generate new recommendations...')
       const newRecommendations = await recommendationEngine.generateRecommendations()
       
       if (newRecommendations.length > 0) {
@@ -134,6 +149,8 @@ export default function Dashboard() {
         console.log(`Generated ${newRecommendations.length} new recommendations`)
       } else {
         setError('No recommendations could be generated with current market conditions')
+        setRecommendations([])
+        setHasLoadedOnce(true)
       }
       
     } catch (err) {
@@ -146,20 +163,36 @@ export default function Dashboard() {
       } else {
         setError(`Failed to generate recommendations: ${err.message}`)
       }
+      
+      setHasLoadedOnce(true)
     } finally {
       setIsGenerating(false)
     }
   }
 
-  const handleRefresh = async () => {
-    // Only check system health if in full mode and user has loaded data
-    if (!demoMode && hasLoadedOnce) {
+  const handleGetRecommendations = async () => {
+    // Check system health first if in full mode
+    if (!demoMode) {
       await checkSystemHealth()
     }
+    
+    // Load existing recommendations first
+    await loadRecommendations()
+  }
+
+  const handleRefresh = async () => {
+    // Check system health if in full mode
+    if (!demoMode) {
+      await checkSystemHealth()
+    }
+    
+    // Reload recommendations
     await loadRecommendations()
   }
 
   const handleModeToggle = (isDemoMode) => {
+    console.log(`Switching to ${isDemoMode ? 'demo' : 'full'} mode`)
+    
     setDemoMode(isDemoMode)
     setRecommendations([]) // Clear current recommendations
     setError(null)
@@ -170,7 +203,7 @@ export default function Dashboard() {
     // Reset system status when switching modes
     if (isDemoMode) {
       setSystemStatus({
-        supabase: { status: 'DEMO', message: 'Demo mode - not using real database' },
+        supabase: { status: 'DEMO', message: 'Demo mode - using mock data' },
         polygon: { status: 'DEMO', message: 'Demo mode - using mock data' },
         fmp: { status: 'DEMO', message: 'Demo mode - using mock data' }
       })
@@ -243,7 +276,7 @@ export default function Dashboard() {
                   )}
                   
                   <button 
-                    onClick={hasLoadedOnce ? generateNewRecommendations : loadRecommendations}
+                    onClick={hasLoadedOnce ? generateNewRecommendations : handleGetRecommendations}
                     className="bg-primary-600 text-white px-4 py-2 rounded-lg hover:bg-primary-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                     disabled={loading || isGenerating}
                   >
@@ -270,16 +303,16 @@ export default function Dashboard() {
         </header>
 
         <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-          {/* System Status - only show in full mode and after first load */}
-          {!demoMode && hasLoadedOnce && <SystemStatus status={systemStatus} />}
+          {/* System Status - show after first load */}
+          {hasLoadedOnce && <SystemStatus status={systemStatus} />}
           
           {/* Demo Mode Info */}
           {demoMode && (
             <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
               <div className="flex">
                 <div className="flex-shrink-0">
-                  <svg className="h-5 w-5 text-blue-400\" viewBox="0 0 20 20\" fill="currentColor">
-                    <path fillRule="evenodd\" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z\" clipRule="evenodd" />
+                  <svg className="h-5 w-5 text-blue-400" viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
                   </svg>
                 </div>
                 <div className="ml-3">
@@ -296,13 +329,13 @@ export default function Dashboard() {
           {/* Disclaimer */}
           <Disclaimer />
           
-          {/* API Setup Notice - only show in full mode */}
+          {/* API Setup Notice - only show in full mode and before first load */}
           {!demoMode && !hasLoadedOnce && (
             <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
               <div className="flex">
                 <div className="flex-shrink-0">
-                  <svg className="h-5 w-5 text-blue-400\" viewBox="0 0 20 20\" fill="currentColor">
-                    <path fillRule="evenodd\" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z\" clipRule="evenodd" />
+                  <svg className="h-5 w-5 text-blue-400" viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
                   </svg>
                 </div>
                 <div className="ml-3">
@@ -386,11 +419,6 @@ export default function Dashboard() {
                       'Analyzing earnings calendar and options data. This may take a few minutes...'
                     }
                   </p>
-                  {rateLimited && !demoMode && (
-                    <p className="text-sm text-blue-600 mt-1">
-                      Using cached data when possible to avoid rate limits.
-                    </p>
-                  )}
                 </div>
               </div>
             </div>
@@ -429,11 +457,18 @@ export default function Dashboard() {
                 }
               </p>
               <button 
-                onClick={loadRecommendations}
-                className="bg-primary-600 text-white px-6 py-3 rounded-lg hover:bg-primary-700 transition-colors text-lg font-medium"
+                onClick={handleGetRecommendations}
+                className="bg-primary-600 text-white px-6 py-3 rounded-lg hover:bg-primary-700 transition-colors text-lg font-medium disabled:opacity-50 disabled:cursor-not-allowed"
                 disabled={loading || isGenerating}
               >
-                Get Recommendations
+                {loading ? (
+                  <div className="flex items-center space-x-2">
+                    <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                    <span>Loading...</span>
+                  </div>
+                ) : (
+                  'Get Recommendations'
+                )}
               </button>
             </div>
           ) : recommendations.length > 0 ? (
@@ -475,12 +510,28 @@ export default function Dashboard() {
                 </svg>
               </div>
               <p className="text-corporate-600 text-lg">No recommendations available</p>
-              <p className="text-corporate-500 text-sm mt-2">
+              <p className="text-corporate-500 text-sm mt-2 mb-4">
                 {demoMode ? 
-                  'Click "Get Recommendations" to load demo data' :
-                  'Click "Generate New" to create recommendations based on current market data'
+                  'No demo data loaded yet. Click "Get Recommendations" to load sample data.' :
+                  'No recommendations found in the database. Click "Generate New" to create recommendations based on current market data.'
                 }
               </p>
+              {!demoMode && (
+                <button 
+                  onClick={generateNewRecommendations}
+                  className="bg-primary-600 text-white px-4 py-2 rounded-lg hover:bg-primary-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  disabled={loading || isGenerating}
+                >
+                  {isGenerating ? (
+                    <div className="flex items-center space-x-2">
+                      <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                      <span>Generating...</span>
+                    </div>
+                  ) : (
+                    'Generate New Recommendations'
+                  )}
+                </button>
+              )}
             </div>
           )}
         </main>

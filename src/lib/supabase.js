@@ -3,23 +3,70 @@ import { createClient } from '@supabase/supabase-js'
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
 const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY
 
-if (!supabaseUrl || !supabaseKey) {
-  console.error('Missing Supabase environment variables')
-  console.error('Required: VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY')
-  throw new Error('Missing Supabase environment variables')
+// Create a dummy client if environment variables are missing (for demo mode)
+let supabase
+
+if (supabaseUrl && supabaseKey) {
+  supabase = createClient(supabaseUrl, supabaseKey, {
+    auth: {
+      persistSession: false, // We're using anonymous access
+      autoRefreshToken: false
+    }
+  })
+} else {
+  console.warn('Missing Supabase environment variables - creating dummy client for demo mode')
+  
+  // Create a dummy client that returns empty data
+  supabase = {
+    from: (table) => ({
+      select: (columns) => ({
+        eq: (column, value) => ({
+          order: (column, options) => ({
+            limit: (count) => Promise.resolve({ data: [], error: null })
+          }),
+          maybeSingle: () => Promise.resolve({ data: null, error: null }),
+          single: () => Promise.resolve({ data: null, error: null })
+        }),
+        gt: (column, value) => ({
+          maybeSingle: () => Promise.resolve({ data: null, error: null })
+        }),
+        lt: (column, value) => Promise.resolve({ data: [], error: null, count: 0 }),
+        neq: (column, value) => Promise.resolve({ data: [], error: null, count: 0 }),
+        maybeSingle: () => Promise.resolve({ data: null, error: null })
+      }),
+      insert: (data) => Promise.resolve({ data: null, error: null }),
+      update: (data) => ({
+        eq: (column, value) => Promise.resolve({ data: null, error: null })
+      }),
+      delete: () => ({
+        eq: (column, value) => Promise.resolve({ data: null, error: null }),
+        lt: (column, value) => Promise.resolve({ data: [], error: null, count: 0 }),
+        neq: (column, value) => Promise.resolve({ data: [], error: null, count: 0 })
+      }),
+      upsert: (data) => Promise.resolve({ data: null, error: null })
+    })
+  }
 }
 
-export const supabase = createClient(supabaseUrl, supabaseKey, {
-  auth: {
-    persistSession: false, // We're using anonymous access
-    autoRefreshToken: false
-  }
-})
+export { supabase }
 
 // Helper function to check connection and RLS policies
 export async function testConnection() {
   try {
     console.log('Testing Supabase connection...')
+    
+    // If no environment variables, return demo status
+    if (!supabaseUrl || !supabaseKey) {
+      return {
+        status: 'DEMO',
+        message: 'Demo mode - Supabase not configured',
+        timestamp: new Date().toISOString(),
+        details: {
+          missingEnvVars: true,
+          suggestion: 'Add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to enable full mode'
+        }
+      }
+    }
     
     // Test basic connection with recommendations table
     const { data: recData, error: recError } = await supabase
@@ -115,6 +162,15 @@ export async function testConnection() {
 export async function testRLSPolicies() {
   try {
     console.log('Testing RLS policies...')
+    
+    // If no environment variables, return demo status
+    if (!supabaseUrl || !supabaseKey) {
+      return {
+        status: 'DEMO',
+        message: 'Demo mode - RLS testing not available',
+        timestamp: new Date().toISOString()
+      }
+    }
     
     const tests = []
     
