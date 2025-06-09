@@ -6,9 +6,9 @@ import { fmpLimiter } from './rateLimiter'
 const FMP_BASE_URL = 'https://financialmodelingprep.com/api/v3'
 const API_KEY = import.meta.env.VITE_FMP_API_KEY
 const USE_MOCK_DATA = import.meta.env.VITE_USE_MOCK_DATA === 'true'
-const CACHE_EARNINGS_MINUTES = parseInt(import.meta.env.VITE_CACHE_EARNINGS_MINUTES) || 240
+const CACHE_EARNINGS_MINUTES = parseInt(import.meta.env.VITE_CACHE_EARNINGS_MINUTES) || 240 // 4 hours default
 
-// Create FMP API client
+// Create FMP API client with enhanced error handling
 const fmpClient = new APIClient(
   FMP_BASE_URL,
   {},
@@ -54,7 +54,7 @@ function getNextWeekRange() {
 }
 
 /**
- * Fetches earnings calendar data from FMP API
+ * Fetches earnings calendar data from FMP API with enhanced error handling
  * @param {string} fromDate - Start date (YYYY-MM-DD)
  * @param {string} toDate - End date (YYYY-MM-DD)
  * @returns {Promise<Array>} Earnings calendar data
@@ -68,9 +68,9 @@ export async function getEarningsCalendar(fromDate = null, toDate = null) {
     toDate = nextWeek.to
   }
   
-  const cacheKey = `earnings_${fromDate}_${toDate}`
+  const cacheKey = `fmp_earnings_${fromDate}_${toDate}`
   
-  // Check cache first
+  // Check cache first (longer cache for FMP data)
   let cachedData = await getCachedData(cacheKey)
   if (cachedData) {
     console.log(`Using cached earnings calendar for ${fromDate} to ${toDate}`)
@@ -95,6 +95,11 @@ export async function getEarningsCalendar(fromDate = null, toDate = null) {
   }
   
   try {
+    console.log(`Fetching earnings calendar from FMP API for ${fromDate} to ${toDate}`)
+    
+    // Check rate limiter before making request
+    await fmpLimiter.checkLimit()
+    
     const data = await fmpClient.get('/earning_calendar', {
       from: fromDate,
       to: toDate,
@@ -108,7 +113,7 @@ export async function getEarningsCalendar(fromDate = null, toDate = null) {
     // Process and enhance earnings data
     const processedData = await processEarningsData(data)
     
-    // Cache for specified hours
+    // Cache for longer duration (4 hours) since earnings don't change frequently
     await setCachedData(cacheKey, processedData, CACHE_EARNINGS_MINUTES)
     
     console.log(`Fetched fresh earnings calendar for ${fromDate} to ${toDate}: ${processedData.length} companies`)
@@ -117,11 +122,20 @@ export async function getEarningsCalendar(fromDate = null, toDate = null) {
   } catch (error) {
     console.error(`Error fetching earnings calendar:`, error)
     
-    // Try to return stale cached data as fallback
-    const staleData = await getCachedData(`${cacheKey}_stale`)
-    if (staleData) {
-      console.log(`Using stale cached earnings data`)
-      return staleData
+    // Handle rate limit errors specifically
+    if (error.status === 429 || error.message.includes('Limit Reach')) {
+      console.warn('FMP API rate limit reached, trying stale cache data')
+      
+      // Try to return stale cached data as fallback
+      const staleData = await getCachedData(`${cacheKey}_stale`)
+      if (staleData) {
+        console.log(`Using stale cached earnings data`)
+        return staleData
+      }
+      
+      // If no stale data, return empty array to prevent cascading failures
+      console.warn('No stale data available, returning empty earnings calendar')
+      return []
     }
     
     throw error
@@ -129,17 +143,25 @@ export async function getEarningsCalendar(fromDate = null, toDate = null) {
 }
 
 /**
- * Process and enhance earnings data
+ * Process and enhance earnings data with batch processing
  * @param {Array} rawData - Raw earnings data from API
  * @returns {Array} Processed earnings data
  */
 async function processEarningsData(rawData) {
   const processedData = []
   
+  // Process in smaller batches to avoid rate limits
+  const batchSize = 5
+  const symbols = [...new Set(rawData.map(e => e.symbol))]
+  
+  console.log(`Processing ${symbols.length} unique symbols in batches of ${batchSize}`)
+  
+  // Get EPS growth data in batches
+  const epsGrowthData = await calculateEPSGrowthBatch(symbols, batchSize)
+  
   for (const earning of rawData) {
     try {
-      // Calculate EPS growth if we have historical data
-      const epsGrowth = await calculateEPSGrowth(earning.symbol)
+      const epsGrowth = epsGrowthData[earning.symbol] || 0
       
       const processedEarning = {
         symbol: earning.symbol,
@@ -169,20 +191,67 @@ async function processEarningsData(rawData) {
 }
 
 /**
- * Calculate EPS growth for a symbol
+ * Calculate EPS growth for multiple symbols in batches
+ * @param {Array} symbols - Array of stock symbols
+ * @param {number} batchSize - Number of symbols to process at once
+ * @returns {Promise<Object>} EPS growth data by symbol
+ */
+async function calculateEPSGrowthBatch(symbols, batchSize = 5) {
+  const results = {}
+  
+  for (let i = 0; i < symbols.length; i += batchSize) {
+    const batch = symbols.slice(i, i + batchSize)
+    
+    console.log(`Processing EPS growth batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(symbols.length / batchSize)}`)
+    
+    const batchPromises = batch.map(async (symbol) => {
+      try {
+        const growth = await calculateEPSGrowth(symbol)
+        return { symbol, growth }
+      } catch (error) {
+        console.warn(`Failed to calculate EPS growth for ${symbol}:`, error)
+        return { symbol, growth: 0 }
+      }
+    })
+    
+    // Wait between batches to avoid overwhelming the API
+    if (i > 0) {
+      const delay = 2000 + Math.random() * 1000 // 2-3 second delay
+      console.log(`Waiting ${Math.round(delay)}ms before next batch...`)
+      await new Promise(resolve => setTimeout(resolve, delay))
+    }
+    
+    const batchResults = await Promise.allSettled(batchPromises)
+    
+    batchResults.forEach((result) => {
+      if (result.status === 'fulfilled') {
+        const { symbol, growth } = result.value
+        results[symbol] = growth
+      }
+    })
+  }
+  
+  return results
+}
+
+/**
+ * Calculate EPS growth for a symbol with enhanced caching
  * @param {string} symbol - Stock symbol
  * @returns {Promise<number>} EPS growth percentage
  */
 async function calculateEPSGrowth(symbol) {
-  const cacheKey = `eps_growth_${symbol}`
+  const cacheKey = `fmp_eps_growth_${symbol}`
   
-  // Check cache first
+  // Check cache first (24 hour cache for EPS growth)
   let cachedGrowth = await getCachedData(cacheKey)
   if (cachedGrowth !== null) {
     return cachedGrowth
   }
   
   try {
+    // Check rate limiter before making request
+    await fmpLimiter.checkLimit()
+    
     // Get historical earnings data
     const data = await fmpClient.get(`/historical/earning_calendar/${symbol}`, {
       limit: 8, // Get last 8 quarters
@@ -190,6 +259,7 @@ async function calculateEPSGrowth(symbol) {
     })
     
     if (!Array.isArray(data) || data.length < 2) {
+      await setCachedData(cacheKey, 0, 1440) // Cache 0 for 24 hours
       return 0 // Not enough data
     }
     
@@ -198,6 +268,7 @@ async function calculateEPSGrowth(symbol) {
     const yearAgoEPS = data[4]?.eps || 0
     
     if (yearAgoEPS === 0) {
+      await setCachedData(cacheKey, 0, 1440)
       return 0
     }
     
@@ -210,19 +281,22 @@ async function calculateEPSGrowth(symbol) {
     
   } catch (error) {
     console.warn(`Error calculating EPS growth for ${symbol}:`, error)
+    
+    // Cache 0 to avoid repeated failed requests
+    await setCachedData(cacheKey, 0, 1440)
     return 0
   }
 }
 
 /**
- * Fetches company profile data from FMP API
+ * Fetches company profile data from FMP API with enhanced error handling
  * @param {string} symbol - Stock ticker symbol
  * @returns {Promise<Object>} Company profile data
  */
 export async function getCompanyProfile(symbol) {
-  const cacheKey = `company_profile_${symbol}`
+  const cacheKey = `fmp_company_profile_${symbol}`
   
-  // Check cache first
+  // Check cache first (24 hour cache)
   let cachedData = await getCachedData(cacheKey)
   if (cachedData) {
     console.log(`Using cached company profile for ${symbol}`)
@@ -249,6 +323,9 @@ export async function getCompanyProfile(symbol) {
   }
   
   try {
+    // Check rate limiter before making request
+    await fmpLimiter.checkLimit()
+    
     const data = await fmpClient.get(`/profile/${symbol}`, {
       apikey: API_KEY
     })
@@ -266,11 +343,16 @@ export async function getCompanyProfile(symbol) {
   } catch (error) {
     console.error(`Error fetching company profile for ${symbol}:`, error)
     
-    // Try to return stale cached data as fallback
-    const staleData = await getCachedData(`${cacheKey}_stale`)
-    if (staleData) {
-      console.log(`Using stale cached company profile for ${symbol}`)
-      return staleData
+    // Handle rate limit errors
+    if (error.status === 429 || error.message.includes('Limit Reach')) {
+      console.warn(`Rate limit reached for ${symbol} profile, using fallback`)
+      
+      // Try to return stale cached data as fallback
+      const staleData = await getCachedData(`${cacheKey}_stale`)
+      if (staleData) {
+        console.log(`Using stale cached company profile for ${symbol}`)
+        return staleData
+      }
     }
     
     throw error
@@ -278,26 +360,53 @@ export async function getCompanyProfile(symbol) {
 }
 
 /**
- * Get earnings for multiple symbols
+ * Get earnings for multiple symbols with enhanced batch processing
  * @param {Array} symbols - Array of stock symbols
  * @returns {Promise<Object>} Combined earnings data
  */
 export async function getMultipleEarnings(symbols) {
   const results = {}
   const errors = []
+  const batchSize = 3 // Smaller batch size for company profiles
   
-  for (const symbol of symbols) {
-    try {
-      console.log(`Fetching earnings data for ${symbol}...`)
-      results[symbol] = await getCompanyProfile(symbol)
-      
-      // Add small delay to avoid overwhelming the API
-      await new Promise(resolve => setTimeout(resolve, 100))
-      
-    } catch (error) {
-      console.error(`Failed to fetch earnings for ${symbol}:`, error)
-      errors.push({ symbol, error: error.message })
+  console.log(`Fetching earnings for ${symbols.length} symbols in batches of ${batchSize}`)
+  
+  for (let i = 0; i < symbols.length; i += batchSize) {
+    const batch = symbols.slice(i, i + batchSize)
+    
+    console.log(`Processing earnings batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(symbols.length / batchSize)}`)
+    
+    const batchPromises = batch.map(async (symbol) => {
+      try {
+        const data = await getCompanyProfile(symbol)
+        return { symbol, data }
+      } catch (error) {
+        console.error(`Failed to fetch earnings for ${symbol}:`, error)
+        return { symbol, error: error.message }
+      }
+    })
+    
+    // Add delay between batches
+    if (i > 0) {
+      const delay = 3000 + Math.random() * 2000 // 3-5 second delay
+      console.log(`Waiting ${Math.round(delay)}ms before next batch...`)
+      await new Promise(resolve => setTimeout(resolve, delay))
     }
+    
+    const batchResults = await Promise.allSettled(batchPromises)
+    
+    batchResults.forEach((result) => {
+      if (result.status === 'fulfilled') {
+        const { symbol, data, error } = result.value
+        if (data) {
+          results[symbol] = data
+        } else if (error) {
+          errors.push({ symbol, error })
+        }
+      } else {
+        errors.push({ symbol: 'unknown', error: result.reason?.message || 'Unknown error' })
+      }
+    })
   }
   
   return {
@@ -308,7 +417,7 @@ export async function getMultipleEarnings(symbols) {
 }
 
 /**
- * Health check for FMP API
+ * Health check for FMP API with enhanced diagnostics
  * @returns {Promise<Object>} API status
  */
 export async function checkFMPAPIHealth() {
@@ -323,6 +432,8 @@ export async function checkFMPAPIHealth() {
     }
     
     // Test with a simple API call
+    await fmpLimiter.checkLimit()
+    
     const data = await fmpClient.get('/profile/AAPL', {
       apikey: API_KEY
     })
@@ -337,17 +448,31 @@ export async function checkFMPAPIHealth() {
       status: 'OK',
       message: 'FMP API is accessible',
       timestamp: new Date().toISOString(),
-      usage: usage
+      usage: usage,
+      rateLimitInfo: {
+        inBackoff: fmpLimiter.isInBackoff(),
+        retryCount: usage.retryCount
+      }
     }
     
   } catch (error) {
     const usage = fmpLimiter.getUsage()
     
+    // Provide specific guidance for rate limit errors
+    let message = error.message
+    if (error.status === 429 || error.message.includes('Limit Reach')) {
+      message = 'FMP API rate limit exceeded. Using cached data when available.'
+    }
+    
     return {
       status: 'ERROR',
-      message: error.message,
+      message: message,
       timestamp: new Date().toISOString(),
-      usage: usage
+      usage: usage,
+      rateLimitInfo: {
+        inBackoff: fmpLimiter.isInBackoff(),
+        retryCount: usage.retryCount
+      }
     }
   }
 }
@@ -358,4 +483,12 @@ export async function checkFMPAPIHealth() {
  */
 export function getFMPUsage() {
   return fmpLimiter.getUsage()
+}
+
+/**
+ * Reset FMP rate limiter (use with caution)
+ */
+export function resetFMPLimiter() {
+  fmpLimiter.reset()
+  console.log('FMP rate limiter has been reset')
 }

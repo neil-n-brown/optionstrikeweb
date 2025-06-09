@@ -16,6 +16,7 @@ export default function Dashboard() {
   const [error, setError] = useState(null)
   const [lastUpdate, setLastUpdate] = useState(null)
   const [isGenerating, setIsGenerating] = useState(false)
+  const [rateLimited, setRateLimited] = useState(false)
   const [systemStatus, setSystemStatus] = useState({
     supabase: { status: 'CHECKING', message: 'Checking connection...' },
     polygon: { status: 'CHECKING', message: 'Checking connection...' },
@@ -56,6 +57,7 @@ export default function Dashboard() {
   const loadRecommendations = async () => {
     setLoading(true)
     setError(null)
+    setRateLimited(false)
     
     try {
       console.log('Loading recommendations...')
@@ -92,6 +94,11 @@ export default function Dashboard() {
       console.error('Error loading recommendations:', err)
       setError(err.message)
       
+      // Check if error is rate limit related
+      if (err.message.includes('rate limit') || err.message.includes('429') || err.message.includes('Limit Reach')) {
+        setRateLimited(true)
+      }
+      
       // Only fall back to mock data if explicitly enabled
       if (USE_MOCK_DATA) {
         setRecommendations(mockRecommendations)
@@ -105,6 +112,7 @@ export default function Dashboard() {
   const generateNewRecommendations = async () => {
     setIsGenerating(true)
     setError(null)
+    setRateLimited(false)
     
     try {
       console.log('Generating new recommendations...')
@@ -121,7 +129,14 @@ export default function Dashboard() {
       
     } catch (err) {
       console.error('Error generating recommendations:', err)
-      setError(`Failed to generate recommendations: ${err.message}`)
+      
+      // Check if error is rate limit related
+      if (err.message.includes('rate limit') || err.message.includes('429') || err.message.includes('Limit Reach')) {
+        setRateLimited(true)
+        setError('API rate limit reached. Using cached data when available.')
+      } else {
+        setError(`Failed to generate recommendations: ${err.message}`)
+      }
     } finally {
       setIsGenerating(false)
     }
@@ -216,8 +231,8 @@ export default function Dashboard() {
             <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
               <div className="flex">
                 <div className="flex-shrink-0">
-                  <svg className="h-5 w-5 text-blue-400\" viewBox="0 0 20 20\" fill="currentColor">
-                    <path fillRule="evenodd\" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z\" clipRule="evenodd" />
+                  <svg className="h-5 w-5 text-blue-400" viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
                   </svg>
                 </div>
                 <div className="ml-3">
@@ -230,6 +245,31 @@ export default function Dashboard() {
                       <li><strong>VITE_SUPABASE_URL</strong> - Your Supabase project URL</li>
                       <li><strong>VITE_SUPABASE_ANON_KEY</strong> - Your Supabase anonymous key</li>
                     </ul>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+          
+          {/* Rate Limit Warning */}
+          {rateLimited && (
+            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-6">
+              <div className="flex">
+                <div className="flex-shrink-0">
+                  <svg className="h-5 w-5 text-yellow-400" viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                  </svg>
+                </div>
+                <div className="ml-3">
+                  <h3 className="text-sm font-medium text-yellow-800">API Rate Limit Warning</h3>
+                  <div className="mt-2 text-sm text-yellow-700">
+                    <p>
+                      We've hit rate limits with our data provider. Some data may be cached or limited.
+                      Please try again later or consider upgrading to a higher API plan for more frequent updates.
+                    </p>
+                    <p className="mt-2">
+                      <strong>Tip:</strong> The app will automatically use cached data when available to minimize API calls.
+                    </p>
                   </div>
                 </div>
               </div>
@@ -266,6 +306,11 @@ export default function Dashboard() {
                   <p className="text-sm text-blue-700 mt-1">
                     Analyzing earnings calendar and options data. This may take a few minutes...
                   </p>
+                  {rateLimited && (
+                    <p className="text-sm text-blue-600 mt-1">
+                      Using cached data when possible to avoid rate limits.
+                    </p>
+                  )}
                 </div>
               </div>
             </div>

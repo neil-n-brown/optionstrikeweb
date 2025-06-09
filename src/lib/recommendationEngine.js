@@ -2,6 +2,7 @@ import { getEarningsCalendar } from './earnings'
 import { getMultipleOptionsChains } from './polygon'
 import { calculatePOP, calculateConfidenceScore, calculateTimeToExpiry, calculateBreakeven, calculateMaxLoss, calculatePremiumPercentage } from './calculations'
 import { supabase } from './supabase'
+import { getCachedData, setCachedData } from './cache'
 
 /**
  * Main recommendation engine that processes earnings and options data
@@ -24,20 +25,58 @@ export class RecommendationEngine {
     try {
       console.log('Starting recommendation generation...')
       
-      // Step 1: Get earnings calendar for current and next week
-      const earningsData = await getEarningsCalendar()
-      console.log(`Found ${earningsData.length} companies with upcoming earnings`)
-      
-      if (earningsData.length === 0) {
-        console.log('No earnings found for the current period')
-        return []
+      // Check for cached recommendations first
+      const cachedRecommendations = await this.getCachedRecommendations()
+      if (cachedRecommendations.length > 0) {
+        console.log(`Found ${cachedRecommendations.length} cached recommendations`)
       }
       
-      // Step 2: Extract symbols and get options data
-      const symbols = earningsData.map(e => e.symbol).slice(0, 10) // Limit to first 10 to avoid rate limits
+      // Step 1: Get earnings calendar for current and next week
+      let earningsData
+      try {
+        earningsData = await getEarningsCalendar()
+        console.log(`Found ${earningsData.length} companies with upcoming earnings`)
+      } catch (error) {
+        console.error('Error fetching earnings data:', error)
+        
+        // If earnings fetch fails due to rate limits, use cached recommendations
+        if (error.message.includes('rate limit') || error.message.includes('429')) {
+          console.warn('Rate limit hit, using cached recommendations')
+          return cachedRecommendations
+        }
+        
+        // For other errors, still try cached recommendations
+        if (cachedRecommendations.length > 0) {
+          console.warn('Using cached recommendations due to earnings API error')
+          return cachedRecommendations
+        }
+        
+        throw error
+      }
+      
+      if (earningsData.length === 0) {
+        console.log('No earnings found for the current period, using cached recommendations')
+        return cachedRecommendations
+      }
+      
+      // Step 2: Extract symbols and get options data (limit to avoid rate limits)
+      const symbols = earningsData.map(e => e.symbol).slice(0, 8) // Reduced from 10 to 8
       console.log(`Fetching options data for symbols: ${symbols.join(', ')}`)
       
-      const optionsData = await getMultipleOptionsChains(symbols)
+      let optionsData
+      try {
+        optionsData = await getMultipleOptionsChains(symbols)
+      } catch (error) {
+        console.error('Error fetching options data:', error)
+        
+        // If options fetch fails, use cached recommendations
+        if (cachedRecommendations.length > 0) {
+          console.warn('Using cached recommendations due to options API error')
+          return cachedRecommendations
+        }
+        
+        throw error
+      }
       
       // Step 3: Process each symbol and generate recommendations
       const recommendations = []
@@ -65,15 +104,28 @@ export class RecommendationEngine {
         .sort((a, b) => b.confidence_score - a.confidence_score)
         .slice(0, 20) // Top 20 recommendations
       
-      console.log(`Generated ${sortedRecommendations.length} recommendations`)
+      console.log(`Generated ${sortedRecommendations.length} new recommendations`)
       
-      // Step 5: Save to database
-      await this.saveRecommendations(sortedRecommendations)
-      
-      return sortedRecommendations
+      // Step 5: Save to database if we have new recommendations
+      if (sortedRecommendations.length > 0) {
+        await this.saveRecommendations(sortedRecommendations)
+        return sortedRecommendations
+      } else {
+        // If no new recommendations generated, return cached ones
+        console.log('No new recommendations generated, using cached recommendations')
+        return cachedRecommendations
+      }
       
     } catch (error) {
       console.error('Error generating recommendations:', error)
+      
+      // Always try to return cached recommendations as fallback
+      const fallbackRecommendations = await this.getCachedRecommendations()
+      if (fallbackRecommendations.length > 0) {
+        console.log(`Returning ${fallbackRecommendations.length} cached recommendations as fallback`)
+        return fallbackRecommendations
+      }
+      
       throw error
     }
   }
@@ -214,33 +266,75 @@ export class RecommendationEngine {
   }
 
   /**
-   * Save recommendations to database
+   * Get cached recommendations from database
+   * @returns {Promise<Array>} Cached recommendations
+   */
+  async getCachedRecommendations() {
+    try {
+      const { data, error } = await supabase
+        .from('recommendations')
+        .select('*')
+        .eq('is_active', true)
+        .order('confidence_score', { ascending: false })
+        .limit(20)
+      
+      if (error) {
+        console.warn('Error fetching cached recommendations:', error)
+        return []
+      }
+      
+      return data || []
+      
+    } catch (error) {
+      console.error('Error fetching cached recommendations:', error)
+      return []
+    }
+  }
+
+  /**
+   * Save recommendations to database with enhanced error handling
    * @param {Array} recommendations - Array of recommendations
    */
   async saveRecommendations(recommendations) {
     try {
       // First, mark all existing recommendations as inactive
-      await supabase
+      const { error: updateError } = await supabase
         .from('recommendations')
         .update({ is_active: false })
         .eq('is_active', true)
       
+      if (updateError) {
+        console.warn('Error deactivating old recommendations:', updateError)
+      }
+      
       // Insert new recommendations
       if (recommendations.length > 0) {
-        const { error } = await supabase
+        const { error: insertError } = await supabase
           .from('recommendations')
           .insert(recommendations)
         
-        if (error) {
-          console.error('Error saving recommendations:', error)
-          throw error
+        if (insertError) {
+          console.error('Error saving recommendations:', insertError)
+          throw insertError
         }
         
         console.log(`Saved ${recommendations.length} recommendations to database`)
+        
+        // Cache the recommendations as well
+        await setCachedData('latest_recommendations', recommendations, 60) // Cache for 1 hour
       }
       
     } catch (error) {
       console.error('Error saving recommendations to database:', error)
+      
+      // Even if database save fails, cache the recommendations
+      try {
+        await setCachedData('latest_recommendations', recommendations, 60)
+        console.log('Cached recommendations despite database error')
+      } catch (cacheError) {
+        console.error('Failed to cache recommendations:', cacheError)
+      }
+      
       throw error
     }
   }
