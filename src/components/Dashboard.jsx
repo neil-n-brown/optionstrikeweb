@@ -13,7 +13,7 @@ import ModeToggle from './ModeToggle'
 
 export default function Dashboard() {
   const [recommendations, setRecommendations] = useState([])
-  const [loading, setLoading] = useState(false) // Changed to false - no auto-loading
+  const [loading, setLoading] = useState(false) // No auto-loading
   const [error, setError] = useState(null)
   const [lastUpdate, setLastUpdate] = useState(null)
   const [isGenerating, setIsGenerating] = useState(false)
@@ -26,12 +26,7 @@ export default function Dashboard() {
     fmp: { status: 'UNKNOWN', message: 'Not checked yet' }
   })
 
-  // Only check system health on mount, don't load recommendations
-  useEffect(() => {
-    if (!demoMode) {
-      checkSystemHealth()
-    }
-  }, [demoMode])
+  // NO useEffect for auto-loading - completely removed
 
   const checkSystemHealth = async () => {
     console.log('Checking system health...')
@@ -157,10 +152,11 @@ export default function Dashboard() {
   }
 
   const handleRefresh = async () => {
-    await Promise.all([
-      !demoMode && checkSystemHealth(),
-      loadRecommendations()
-    ].filter(Boolean))
+    // Only check system health if in full mode and user has loaded data
+    if (!demoMode && hasLoadedOnce) {
+      await checkSystemHealth()
+    }
+    await loadRecommendations()
   }
 
   const handleModeToggle = (isDemoMode) => {
@@ -171,15 +167,18 @@ export default function Dashboard() {
     setHasLoadedOnce(false)
     setLastUpdate(null)
     
-    if (!isDemoMode) {
-      // When switching to full mode, check system health
-      checkSystemHealth()
-    } else {
-      // When switching to demo mode, reset system status
+    // Reset system status when switching modes
+    if (isDemoMode) {
       setSystemStatus({
         supabase: { status: 'DEMO', message: 'Demo mode - not using real database' },
         polygon: { status: 'DEMO', message: 'Demo mode - using mock data' },
         fmp: { status: 'DEMO', message: 'Demo mode - using mock data' }
+      })
+    } else {
+      setSystemStatus({
+        supabase: { status: 'UNKNOWN', message: 'Not checked yet' },
+        polygon: { status: 'UNKNOWN', message: 'Not checked yet' },
+        fmp: { status: 'UNKNOWN', message: 'Not checked yet' }
       })
     }
   }
@@ -271,16 +270,16 @@ export default function Dashboard() {
         </header>
 
         <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-          {/* System Status - only show in full mode */}
-          {!demoMode && <SystemStatus status={systemStatus} />}
+          {/* System Status - only show in full mode and after first load */}
+          {!demoMode && hasLoadedOnce && <SystemStatus status={systemStatus} />}
           
           {/* Demo Mode Info */}
           {demoMode && (
             <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
               <div className="flex">
                 <div className="flex-shrink-0">
-                  <svg className="h-5 w-5 text-blue-400\" viewBox="0 0 20 20\" fill="currentColor">
-                    <path fillRule="evenodd\" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z\" clipRule="evenodd" />
+                  <svg className="h-5 w-5 text-blue-400" viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
                   </svg>
                 </div>
                 <div className="ml-3">
@@ -298,12 +297,12 @@ export default function Dashboard() {
           <Disclaimer />
           
           {/* API Setup Notice - only show in full mode */}
-          {!demoMode && (
+          {!demoMode && !hasLoadedOnce && (
             <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
               <div className="flex">
                 <div className="flex-shrink-0">
-                  <svg className="h-5 w-5 text-blue-400\" viewBox="0 0 20 20\" fill="currentColor">
-                    <path fillRule="evenodd\" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z\" clipRule="evenodd" />
+                  <svg className="h-5 w-5 text-blue-400" viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
                   </svg>
                 </div>
                 <div className="ml-3">
