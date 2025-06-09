@@ -88,37 +88,37 @@ export default function Dashboard() {
   const isDataStale = lastUpdate && (Date.now() - lastUpdate.getTime()) > 30 * 60 * 1000 // 30 minutes
 
   return (
-    <div className="min-h-screen bg-gradient-dark">
+    <div className="min-h-screen bg-corporate-50">
       {/* Header */}
-      <header className="glass-effect border-b border-dark-600">
+      <header className="bg-white shadow-sm border-b border-corporate-200">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between">
             <div className="flex items-center space-x-3">
-              <div className="w-8 h-8 bg-gradient-to-br from-primary-500 to-primary-700 rounded-lg flex items-center justify-center shadow-lg">
+              <div className="w-8 h-8 bg-primary-600 rounded-lg flex items-center justify-center">
                 <span className="text-white font-bold text-sm">OS</span>
               </div>
               <div>
-                <h1 className="text-2xl font-bold text-white">OptionStrike</h1>
-                <p className="text-sm text-dark-300">High-Probability Put Options</p>
+                <h1 className="text-2xl font-bold text-corporate-900">OptionStrike</h1>
+                <p className="text-sm text-corporate-600">High-Probability Put Options</p>
               </div>
             </div>
             
             <div className="mt-4 sm:mt-0 flex items-center space-x-4">
               {lastUpdate && (
-                <div className="text-sm text-dark-300">
+                <div className="text-sm text-corporate-600">
                   <span className="hidden sm:inline">Last updated: </span>
-                  <span className={isDataStale ? 'text-red-400 font-medium' : 'text-dark-200'}>
+                  <span className={isDataStale ? 'text-red-600 font-medium' : ''}>
                     {lastUpdate.toLocaleTimeString()}
                   </span>
                   {isDataStale && (
-                    <span className="ml-2 text-red-400">⚠️ Data may be stale</span>
+                    <span className="ml-2 text-red-600">⚠️ Data may be stale</span>
                   )}
                 </div>
               )}
               
               <button 
                 onClick={handleRefresh}
-                className="bg-gradient-to-r from-primary-600 to-primary-700 text-white px-4 py-2 rounded-lg hover:from-primary-700 hover:to-primary-800 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg hover:shadow-xl transform hover:-translate-y-0.5"
+                className="bg-primary-600 text-white px-4 py-2 rounded-lg hover:bg-primary-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 disabled={loading}
               >
                 {loading ? (
@@ -144,7 +144,7 @@ export default function Dashboard() {
         
         {/* Error State */}
         {error && (
-          <div className="bg-red-900/20 border border-red-500/30 rounded-lg p-4 mb-6 backdrop-blur-sm">
+          <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-6">
             <div className="flex">
               <div className="flex-shrink-0">
                 <svg className="h-5 w-5 text-red-400\" viewBox="0 0 20 20\" fill="currentColor">
@@ -152,8 +152,8 @@ export default function Dashboard() {
                 </svg>
               </div>
               <div className="ml-3">
-                <h3 className="text-sm font-medium text-red-300">Error Loading Data</h3>
-                <div className="mt-2 text-sm text-red-200">
+                <h3 className="text-sm font-medium text-red-800">Error Loading Data</h3>
+                <div className="mt-2 text-sm text-red-700">
                   <p>{error}</p>
                   <p className="mt-1">Displaying cached or mock data instead.</p>
                 </div>
@@ -165,29 +165,29 @@ export default function Dashboard() {
         {/* Loading State */}
         {loading ? (
           <div className="text-center py-12">
-            <div className="w-12 h-12 border-4 border-dark-600 border-t-primary-500 rounded-full animate-spin mx-auto"></div>
-            <p className="mt-4 text-dark-200">Loading recommendations...</p>
-            <p className="text-sm text-dark-400 mt-2">Analyzing options data and calculating confidence scores</p>
+            <div className="w-12 h-12 border-4 border-primary-200 border-t-primary-600 rounded-full animate-spin mx-auto"></div>
+            <p className="mt-4 text-corporate-600">Loading recommendations...</p>
+            <p className="text-sm text-corporate-500 mt-2">Analyzing options data and calculating confidence scores</p>
           </div>
         ) : recommendations.length > 0 ? (
           <>
             {/* Stats Summary */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-              <div className="card-dark rounded-lg p-4">
-                <div className="text-2xl font-bold text-white">{recommendations.length}</div>
-                <div className="text-sm text-dark-300">Active Recommendations</div>
+              <div className="bg-white rounded-lg shadow-sm border border-corporate-200 p-4">
+                <div className="text-2xl font-bold text-corporate-900">{recommendations.length}</div>
+                <div className="text-sm text-corporate-600">Active Recommendations</div>
               </div>
-              <div className="card-dark rounded-lg p-4">
-                <div className="text-2xl font-bold text-green-400">
+              <div className="bg-white rounded-lg shadow-sm border border-corporate-200 p-4">
+                <div className="text-2xl font-bold text-green-600">
                   {recommendations.filter(r => r.confidence_score >= 80).length}
                 </div>
-                <div className="text-sm text-dark-300">High Confidence</div>
+                <div className="text-sm text-corporate-600">High Confidence</div>
               </div>
-              <div className="card-dark rounded-lg p-4">
-                <div className="text-2xl font-bold text-white">
+              <div className="bg-white rounded-lg shadow-sm border border-corporate-200 p-4">
+                <div className="text-2xl font-bold text-corporate-900">
                   {(recommendations.reduce((sum, r) => sum + r.pop, 0) / recommendations.length).toFixed(1)}%
                 </div>
-                <div className="text-sm text-dark-300">Avg. Probability of Profit</div>
+                <div className="text-sm text-corporate-600">Avg. Probability of Profit</div>
               </div>
             </div>
             
@@ -200,13 +200,13 @@ export default function Dashboard() {
           </>
         ) : (
           <div className="text-center py-12">
-            <div className="w-16 h-16 bg-dark-800 rounded-full flex items-center justify-center mx-auto mb-4">
-              <svg className="w-8 h-8 text-dark-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <div className="w-16 h-16 bg-corporate-100 rounded-full flex items-center justify-center mx-auto mb-4">
+              <svg className="w-8 h-8 text-corporate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
               </svg>
             </div>
-            <p className="text-dark-200 text-lg">No recommendations available</p>
-            <p className="text-dark-400 text-sm mt-2">Check back later or refresh to load new data</p>
+            <p className="text-corporate-600 text-lg">No recommendations available</p>
+            <p className="text-corporate-500 text-sm mt-2">Check back later or refresh to load new data</p>
           </div>
         )}
       </main>

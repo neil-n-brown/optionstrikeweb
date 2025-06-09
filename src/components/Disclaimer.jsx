@@ -1,6 +1,6 @@
 export default function Disclaimer() {
   return (
-    <div className="bg-yellow-900/20 border border-yellow-500/30 rounded-lg p-4 mb-6 backdrop-blur-sm">
+    <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-6">
       <div className="flex">
         <div className="flex-shrink-0">
           <svg className="h-5 w-5 text-yellow-400" viewBox="0 0 20 20" fill="currentColor">
@@ -8,8 +8,8 @@ export default function Disclaimer() {
           </svg>
         </div>
         <div className="ml-3">
-          <h3 className="text-sm font-medium text-yellow-300">Important Risk Disclaimer</h3>
-          <div className="mt-2 text-sm text-yellow-200 space-y-2">
+          <h3 className="text-sm font-medium text-yellow-800">Important Risk Disclaimer</h3>
+          <div className="mt-2 text-sm text-yellow-700 space-y-2">
             <p>
               <strong>Options trading involves substantial risk and is not suitable for all investors.</strong> 
               You can lose more than your initial investment. Past performance does not guarantee future results.
