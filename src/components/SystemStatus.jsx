@@ -1,3 +1,6 @@
+import { getPolygonUsage, getFMPUsage } from '../lib/polygon'
+import { getFMPUsage as getFMPUsageFromEarnings } from '../lib/earnings'
+
 export default function SystemStatus({ status }) {
   const getStatusColor = (statusValue) => {
     switch (statusValue) {
@@ -39,6 +42,19 @@ export default function SystemStatus({ status }) {
     }
   }
 
+  const getUsageColor = (usage) => {
+    if (!usage) return 'text-corporate-500'
+    const percentage = (usage.current / usage.max) * 100
+    if (percentage >= 90) return 'text-red-600'
+    if (percentage >= 70) return 'text-yellow-600'
+    return 'text-green-600'
+  }
+
+  const formatUsage = (usage) => {
+    if (!usage) return 'Unknown'
+    return `${usage.current}/${usage.max} (${usage.remaining} remaining)`
+  }
+
   const hasErrors = Object.values(status).some(s => s.status === 'ERROR')
   const allOK = Object.values(status).every(s => s.status === 'OK')
 
@@ -77,6 +93,11 @@ export default function SystemStatus({ status }) {
             <div className={`text-xs truncate ${getStatusColor(status.polygon?.status)}`}>
               {status.polygon?.message || 'Unknown'}
             </div>
+            {status.polygon?.usage && (
+              <div className={`text-xs ${getUsageColor(status.polygon.usage)}`}>
+                {formatUsage(status.polygon.usage)}
+              </div>
+            )}
           </div>
         </div>
         
@@ -87,6 +108,11 @@ export default function SystemStatus({ status }) {
             <div className={`text-xs truncate ${getStatusColor(status.fmp?.status)}`}>
               {status.fmp?.message || 'Unknown'}
             </div>
+            {status.fmp?.usage && (
+              <div className={`text-xs ${getUsageColor(status.fmp.usage)}`}>
+                {formatUsage(status.fmp.usage)}
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -95,6 +121,15 @@ export default function SystemStatus({ status }) {
         <div className="mt-3 pt-3 border-t border-red-200">
           <p className="text-xs text-red-700">
             Some services are experiencing issues. The app will use cached data when available.
+          </p>
+        </div>
+      )}
+      
+      {/* API Usage Warning */}
+      {(status.polygon?.usage?.remaining <= 1 || status.fmp?.usage?.remaining <= 10) && (
+        <div className="mt-3 pt-3 border-t border-yellow-200">
+          <p className="text-xs text-yellow-700">
+            ⚠️ API quota is running low. Consider switching to mock data mode or wait for quota reset.
           </p>
         </div>
       )}

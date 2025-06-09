@@ -1,11 +1,14 @@
 import Dashboard from './components/Dashboard'
+import ErrorBoundary from './components/ErrorBoundary'
 import './index.css'
 
 function App() {
   return (
-    <div className="App">
-      <Dashboard />
-    </div>
+    <ErrorBoundary>
+      <div className="App">
+        <Dashboard />
+      </div>
+    </ErrorBoundary>
   )
 }
 

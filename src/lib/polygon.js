@@ -1,39 +1,20 @@
 import { getCachedData, setCachedData } from './cache'
 import { mockOptionsData, simulateDelay } from './mockData'
+import { APIClient, APIError } from './apiClient'
+import { polygonLimiter } from './rateLimiter'
 
 const POLYGON_BASE_URL = 'https://api.polygon.io'
 const API_KEY = import.meta.env.VITE_POLYGON_API_KEY
 const USE_MOCK_DATA = import.meta.env.VITE_USE_MOCK_DATA === 'true'
+const CACHE_STOCK_MINUTES = parseInt(import.meta.env.VITE_CACHE_STOCK_MINUTES) || 5
+const CACHE_OPTIONS_MINUTES = parseInt(import.meta.env.VITE_CACHE_OPTIONS_MINUTES) || 15
 
-/**
- * Rate limiter for Polygon API (5 requests per minute for free tier)
- */
-class RateLimiter {
-  constructor(maxRequests = 5, windowMs = 60000) {
-    this.maxRequests = maxRequests
-    this.windowMs = windowMs
-    this.requests = []
-  }
-
-  async checkLimit() {
-    const now = Date.now()
-    const windowStart = now - this.windowMs
-    
-    // Remove old requests outside the window
-    this.requests = this.requests.filter(time => time > windowStart)
-    
-    if (this.requests.length >= this.maxRequests) {
-      const oldestRequest = Math.min(...this.requests)
-      const waitTime = this.windowMs - (now - oldestRequest)
-      throw new Error(`Rate limit exceeded. Please wait ${Math.ceil(waitTime / 1000)} seconds.`)
-    }
-    
-    this.requests.push(now)
-    return true
-  }
-}
-
-const polygonLimiter = new RateLimiter(5, 60000)
+// Create Polygon API client
+const polygonClient = new APIClient(
+  POLYGON_BASE_URL,
+  {},
+  polygonLimiter
+)
 
 /**
  * Fetches current stock price from Polygon API
@@ -68,32 +49,26 @@ export async function getStockPrice(symbol) {
         o: mockPrice * 1.01,
         v: 1000000,
         t: Date.now()
-      }]
+      }],
+      status: 'OK'
     }
     
-    await setCachedData(cacheKey, mockData, 5)
+    await setCachedData(cacheKey, mockData, CACHE_STOCK_MINUTES)
     return mockData
   }
   
   try {
-    await polygonLimiter.checkLimit()
-    
-    const response = await fetch(
-      `${POLYGON_BASE_URL}/v2/aggs/ticker/${symbol}/prev?adjusted=true&apikey=${API_KEY}`
-    )
-    
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`)
-    }
-    
-    const data = await response.json()
+    const data = await polygonClient.get(`/v2/aggs/ticker/${symbol}/prev`, {
+      adjusted: 'true',
+      apikey: API_KEY
+    })
     
     if (data.status !== 'OK') {
-      throw new Error(`API error: ${data.error || 'Unknown error'}`)
+      throw new APIError(`API error: ${data.error || 'Unknown error'}`, 500, 'Polygon')
     }
     
-    // Cache for 5 minutes
-    await setCachedData(cacheKey, data, 5)
+    // Cache for specified minutes
+    await setCachedData(cacheKey, data, CACHE_STOCK_MINUTES)
     
     console.log(`Fetched fresh stock price for ${symbol}`)
     return data
@@ -102,7 +77,7 @@ export async function getStockPrice(symbol) {
     console.error(`Error fetching stock price for ${symbol}:`, error)
     
     // Try to return stale cached data as fallback
-    const staleData = await getCachedData(`stock_price_${symbol}_stale`)
+    const staleData = await getCachedData(`${cacheKey}_stale`)
     if (staleData) {
       console.log(`Using stale cached data for ${symbol}`)
       return staleData
@@ -115,10 +90,11 @@ export async function getStockPrice(symbol) {
 /**
  * Fetches options chain data from Polygon API
  * @param {string} symbol - Stock ticker symbol
+ * @param {string} expirationDate - Optional expiration date filter (YYYY-MM-DD)
  * @returns {Promise<Object>} Options chain data
  */
-export async function getOptionsChain(symbol) {
-  const cacheKey = `options_chain_${symbol}`
+export async function getOptionsChain(symbol, expirationDate = null) {
+  const cacheKey = `options_chain_${symbol}${expirationDate ? `_${expirationDate}` : ''}`
   
   // Check cache first
   let cachedData = await getCachedData(cacheKey)
@@ -137,44 +113,136 @@ export async function getOptionsChain(symbol) {
       options: []
     }
     
-    await setCachedData(cacheKey, mockData, 15)
+    await setCachedData(cacheKey, mockData, CACHE_OPTIONS_MINUTES)
     return mockData
   }
   
   try {
-    await polygonLimiter.checkLimit()
-    
-    const response = await fetch(
-      `${POLYGON_BASE_URL}/v3/snapshot/options/${symbol}?apikey=${API_KEY}`
-    )
-    
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`)
-    }
-    
-    const data = await response.json()
+    // Get options snapshot
+    const data = await polygonClient.get(`/v3/snapshot/options/${symbol}`, {
+      apikey: API_KEY
+    })
     
     if (data.status !== 'OK') {
-      throw new Error(`API error: ${data.error || 'Unknown error'}`)
+      throw new APIError(`API error: ${data.error || 'Unknown error'}`, 500, 'Polygon')
     }
     
-    // Cache for 15 minutes during market hours
-    await setCachedData(cacheKey, data, 15)
+    // Process and filter options data
+    const processedData = await processOptionsData(data, symbol, expirationDate)
+    
+    // Cache for specified minutes
+    await setCachedData(cacheKey, processedData, CACHE_OPTIONS_MINUTES)
     
     console.log(`Fetched fresh options chain for ${symbol}`)
-    return data
+    return processedData
     
   } catch (error) {
     console.error(`Error fetching options chain for ${symbol}:`, error)
     
     // Try to return stale cached data as fallback
-    const staleData = await getCachedData(`options_chain_${symbol}_stale`)
+    const staleData = await getCachedData(`${cacheKey}_stale`)
     if (staleData) {
       console.log(`Using stale cached data for ${symbol}`)
       return staleData
     }
     
     throw error
+  }
+}
+
+/**
+ * Process raw options data from Polygon API
+ * @param {Object} rawData - Raw API response
+ * @param {string} symbol - Stock symbol
+ * @param {string} expirationDate - Optional expiration filter
+ * @returns {Object} Processed options data
+ */
+async function processOptionsData(rawData, symbol, expirationDate = null) {
+  try {
+    // Get current stock price for calculations
+    const stockData = await getStockPrice(symbol)
+    const currentPrice = stockData.results?.[0]?.c || 0
+    
+    const processedOptions = []
+    
+    if (rawData.results && Array.isArray(rawData.results)) {
+      for (const option of rawData.results) {
+        // Filter by expiration date if specified
+        if (expirationDate && option.details?.expiration_date !== expirationDate) {
+          continue
+        }
+        
+        // Only process put options
+        if (option.details?.contract_type !== 'put') {
+          continue
+        }
+        
+        // Calculate additional metrics
+        const strike = option.details?.strike_price || 0
+        const premium = option.market_status === 'open' ? 
+          ((option.bid || 0) + (option.ask || 0)) / 2 : 
+          option.last_quote?.price || 0
+        
+        const processedOption = {
+          symbol: symbol,
+          strike: strike,
+          expiration: option.details?.expiration_date,
+          type: 'put',
+          bid: option.bid || 0,
+          ask: option.ask || 0,
+          premium: premium,
+          delta: option.greeks?.delta || 0,
+          impliedVolatility: option.implied_volatility || 0,
+          volume: option.session?.volume || 0,
+          openInterest: option.open_interest || 0,
+          stockPrice: currentPrice
+        }
+        
+        processedOptions.push(processedOption)
+      }
+    }
+    
+    return {
+      symbol: symbol,
+      underlyingPrice: currentPrice,
+      options: processedOptions,
+      timestamp: new Date().toISOString(),
+      status: 'OK'
+    }
+    
+  } catch (error) {
+    console.error('Error processing options data:', error)
+    throw error
+  }
+}
+
+/**
+ * Get options for multiple symbols with earnings
+ * @param {Array} symbols - Array of stock symbols
+ * @returns {Promise<Object>} Combined options data
+ */
+export async function getMultipleOptionsChains(symbols) {
+  const results = {}
+  const errors = []
+  
+  for (const symbol of symbols) {
+    try {
+      console.log(`Fetching options for ${symbol}...`)
+      results[symbol] = await getOptionsChain(symbol)
+      
+      // Add small delay to avoid overwhelming the API
+      await new Promise(resolve => setTimeout(resolve, 200))
+      
+    } catch (error) {
+      console.error(`Failed to fetch options for ${symbol}:`, error)
+      errors.push({ symbol, error: error.message })
+    }
+  }
+  
+  return {
+    results,
+    errors,
+    timestamp: new Date().toISOString()
   }
 }
 
@@ -188,28 +256,41 @@ export async function checkPolygonAPIHealth() {
       return { 
         status: 'OK', 
         message: 'Using mock data mode',
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        usage: { current: 0, max: 5, remaining: 5 }
       }
     }
     
-    const response = await fetch(`${POLYGON_BASE_URL}/v1/marketstatus/now?apikey=${API_KEY}`)
+    // Test with a simple market status call
+    const data = await polygonClient.get('/v1/marketstatus/now', {
+      apikey: API_KEY
+    })
     
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`)
-    }
+    const usage = polygonLimiter.getUsage()
     
-    const data = await response.json()
     return {
       status: data.status || 'OK',
-      message: 'Polygon API is accessible',
-      timestamp: new Date().toISOString()
+      message: `Polygon API is accessible. Market: ${data.market || 'unknown'}`,
+      timestamp: new Date().toISOString(),
+      usage: usage
     }
     
   } catch (error) {
+    const usage = polygonLimiter.getUsage()
+    
     return {
       status: 'ERROR',
       message: error.message,
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
+      usage: usage
     }
   }
+}
+
+/**
+ * Get rate limiter usage statistics
+ * @returns {Object} Usage statistics
+ */
+export function getPolygonUsage() {
+  return polygonLimiter.getUsage()
 }

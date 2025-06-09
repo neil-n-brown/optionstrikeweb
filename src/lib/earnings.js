@@ -1,39 +1,19 @@
 import { getCachedData, setCachedData } from './cache'
 import { mockEarningsData, simulateDelay } from './mockData'
+import { APIClient, APIError } from './apiClient'
+import { fmpLimiter } from './rateLimiter'
 
 const FMP_BASE_URL = 'https://financialmodelingprep.com/api/v3'
 const API_KEY = import.meta.env.VITE_FMP_API_KEY
 const USE_MOCK_DATA = import.meta.env.VITE_USE_MOCK_DATA === 'true'
+const CACHE_EARNINGS_MINUTES = parseInt(import.meta.env.VITE_CACHE_EARNINGS_MINUTES) || 240
 
-/**
- * Rate limiter for FMP API (250 requests per minute for free tier)
- */
-class RateLimiter {
-  constructor(maxRequests = 250, windowMs = 60000) {
-    this.maxRequests = maxRequests
-    this.windowMs = windowMs
-    this.requests = []
-  }
-
-  async checkLimit() {
-    const now = Date.now()
-    const windowStart = now - this.windowMs
-    
-    // Remove old requests outside the window
-    this.requests = this.requests.filter(time => time > windowStart)
-    
-    if (this.requests.length >= this.maxRequests) {
-      const oldestRequest = Math.min(...this.requests)
-      const waitTime = this.windowMs - (now - oldestRequest)
-      throw new Error(`Rate limit exceeded. Please wait ${Math.ceil(waitTime / 1000)} seconds.`)
-    }
-    
-    this.requests.push(now)
-    return true
-  }
-}
-
-const fmpLimiter = new RateLimiter(250, 60000)
+// Create FMP API client
+const fmpClient = new APIClient(
+  FMP_BASE_URL,
+  {},
+  fmpLimiter
+)
 
 /**
  * Gets current week date range
@@ -55,17 +35,37 @@ function getCurrentWeekRange() {
 }
 
 /**
+ * Gets next week date range
+ * @returns {Object} From and to dates for next week
+ */
+function getNextWeekRange() {
+  const now = new Date()
+  const dayOfWeek = now.getDay()
+  const startOfNextWeek = new Date(now)
+  startOfNextWeek.setDate(now.getDate() + (7 - dayOfWeek))
+  
+  const endOfNextWeek = new Date(startOfNextWeek)
+  endOfNextWeek.setDate(startOfNextWeek.getDate() + 6)
+  
+  return {
+    from: startOfNextWeek.toISOString().split('T')[0],
+    to: endOfNextWeek.toISOString().split('T')[0]
+  }
+}
+
+/**
  * Fetches earnings calendar data from FMP API
  * @param {string} fromDate - Start date (YYYY-MM-DD)
  * @param {string} toDate - End date (YYYY-MM-DD)
  * @returns {Promise<Array>} Earnings calendar data
  */
 export async function getEarningsCalendar(fromDate = null, toDate = null) {
-  // Use current week if no dates provided
+  // Use current and next week if no dates provided
   if (!fromDate || !toDate) {
-    const weekRange = getCurrentWeekRange()
-    fromDate = weekRange.from
-    toDate = weekRange.to
+    const currentWeek = getCurrentWeekRange()
+    const nextWeek = getNextWeekRange()
+    fromDate = currentWeek.from
+    toDate = nextWeek.to
   }
   
   const cacheKey = `earnings_${fromDate}_${toDate}`
@@ -90,44 +90,127 @@ export async function getEarningsCalendar(fromDate = null, toDate = null) {
       return itemDate >= from && itemDate <= to
     })
     
-    await setCachedData(cacheKey, filteredData, 240) // Cache for 4 hours
+    await setCachedData(cacheKey, filteredData, CACHE_EARNINGS_MINUTES)
     return filteredData
   }
   
   try {
-    await fmpLimiter.checkLimit()
+    const data = await fmpClient.get('/earning_calendar', {
+      from: fromDate,
+      to: toDate,
+      apikey: API_KEY
+    })
     
-    const response = await fetch(
-      `${FMP_BASE_URL}/earning_calendar?from=${fromDate}&to=${toDate}&apikey=${API_KEY}`
-    )
-    
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`)
+    if (!Array.isArray(data)) {
+      throw new APIError('Invalid response format from earnings API', 500, 'FMP')
     }
     
-    const data = await response.json()
+    // Process and enhance earnings data
+    const processedData = await processEarningsData(data)
     
-    if (Array.isArray(data) && data.length === 0) {
-      console.log(`No earnings found for ${fromDate} to ${toDate}`)
-    }
+    // Cache for specified hours
+    await setCachedData(cacheKey, processedData, CACHE_EARNINGS_MINUTES)
     
-    // Cache for 4 hours (earnings don't change frequently)
-    await setCachedData(cacheKey, data, 240)
-    
-    console.log(`Fetched fresh earnings calendar for ${fromDate} to ${toDate}`)
-    return data
+    console.log(`Fetched fresh earnings calendar for ${fromDate} to ${toDate}: ${processedData.length} companies`)
+    return processedData
     
   } catch (error) {
     console.error(`Error fetching earnings calendar:`, error)
     
     // Try to return stale cached data as fallback
-    const staleData = await getCachedData(`earnings_${fromDate}_${toDate}_stale`)
+    const staleData = await getCachedData(`${cacheKey}_stale`)
     if (staleData) {
       console.log(`Using stale cached earnings data`)
       return staleData
     }
     
     throw error
+  }
+}
+
+/**
+ * Process and enhance earnings data
+ * @param {Array} rawData - Raw earnings data from API
+ * @returns {Array} Processed earnings data
+ */
+async function processEarningsData(rawData) {
+  const processedData = []
+  
+  for (const earning of rawData) {
+    try {
+      // Calculate EPS growth if we have historical data
+      const epsGrowth = await calculateEPSGrowth(earning.symbol)
+      
+      const processedEarning = {
+        symbol: earning.symbol,
+        date: earning.date,
+        eps: earning.eps,
+        epsEstimated: earning.epsEstimated,
+        revenue: earning.revenue,
+        revenueEstimated: earning.revenueEstimated,
+        epsGrowth: epsGrowth,
+        marketCap: earning.marketCap || 0,
+        time: earning.time || 'bmo' // before market open
+      }
+      
+      processedData.push(processedEarning)
+      
+    } catch (error) {
+      console.warn(`Error processing earnings for ${earning.symbol}:`, error)
+      // Include the earning anyway with default values
+      processedData.push({
+        ...earning,
+        epsGrowth: 0
+      })
+    }
+  }
+  
+  return processedData
+}
+
+/**
+ * Calculate EPS growth for a symbol
+ * @param {string} symbol - Stock symbol
+ * @returns {Promise<number>} EPS growth percentage
+ */
+async function calculateEPSGrowth(symbol) {
+  const cacheKey = `eps_growth_${symbol}`
+  
+  // Check cache first
+  let cachedGrowth = await getCachedData(cacheKey)
+  if (cachedGrowth !== null) {
+    return cachedGrowth
+  }
+  
+  try {
+    // Get historical earnings data
+    const data = await fmpClient.get(`/historical/earning_calendar/${symbol}`, {
+      limit: 8, // Get last 8 quarters
+      apikey: API_KEY
+    })
+    
+    if (!Array.isArray(data) || data.length < 2) {
+      return 0 // Not enough data
+    }
+    
+    // Calculate year-over-year growth (compare with 4 quarters ago)
+    const currentEPS = data[0]?.eps || 0
+    const yearAgoEPS = data[4]?.eps || 0
+    
+    if (yearAgoEPS === 0) {
+      return 0
+    }
+    
+    const growth = ((currentEPS - yearAgoEPS) / Math.abs(yearAgoEPS)) * 100
+    
+    // Cache for 24 hours
+    await setCachedData(cacheKey, growth, 1440)
+    
+    return growth
+    
+  } catch (error) {
+    console.warn(`Error calculating EPS growth for ${symbol}:`, error)
+    return 0
   }
 }
 
@@ -166,17 +249,13 @@ export async function getCompanyProfile(symbol) {
   }
   
   try {
-    await fmpLimiter.checkLimit()
+    const data = await fmpClient.get(`/profile/${symbol}`, {
+      apikey: API_KEY
+    })
     
-    const response = await fetch(
-      `${FMP_BASE_URL}/profile/${symbol}?apikey=${API_KEY}`
-    )
-    
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`)
+    if (!Array.isArray(data) || data.length === 0) {
+      throw new APIError(`No profile data found for ${symbol}`, 404, 'FMP')
     }
-    
-    const data = await response.json()
     
     // Cache for 24 hours (company profiles don't change often)
     await setCachedData(cacheKey, data, 1440)
@@ -188,13 +267,43 @@ export async function getCompanyProfile(symbol) {
     console.error(`Error fetching company profile for ${symbol}:`, error)
     
     // Try to return stale cached data as fallback
-    const staleData = await getCachedData(`company_profile_${symbol}_stale`)
+    const staleData = await getCachedData(`${cacheKey}_stale`)
     if (staleData) {
       console.log(`Using stale cached company profile for ${symbol}`)
       return staleData
     }
     
     throw error
+  }
+}
+
+/**
+ * Get earnings for multiple symbols
+ * @param {Array} symbols - Array of stock symbols
+ * @returns {Promise<Object>} Combined earnings data
+ */
+export async function getMultipleEarnings(symbols) {
+  const results = {}
+  const errors = []
+  
+  for (const symbol of symbols) {
+    try {
+      console.log(`Fetching earnings data for ${symbol}...`)
+      results[symbol] = await getCompanyProfile(symbol)
+      
+      // Add small delay to avoid overwhelming the API
+      await new Promise(resolve => setTimeout(resolve, 100))
+      
+    } catch (error) {
+      console.error(`Failed to fetch earnings for ${symbol}:`, error)
+      errors.push({ symbol, error: error.message })
+    }
+  }
+  
+  return {
+    results,
+    errors,
+    timestamp: new Date().toISOString()
   }
 }
 
@@ -208,34 +317,45 @@ export async function checkFMPAPIHealth() {
       return { 
         status: 'OK', 
         message: 'Using mock data mode',
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        usage: { current: 0, max: 250, remaining: 250 }
       }
     }
     
     // Test with a simple API call
-    const response = await fetch(`${FMP_BASE_URL}/profile/AAPL?apikey=${API_KEY}`)
+    const data = await fmpClient.get('/profile/AAPL', {
+      apikey: API_KEY
+    })
     
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`)
+    if (!Array.isArray(data) || data.length === 0) {
+      throw new APIError('Invalid response from FMP API', 500, 'FMP')
     }
     
-    const data = await response.json()
-    
-    if (data.error) {
-      throw new Error(data.error)
-    }
+    const usage = fmpLimiter.getUsage()
     
     return {
       status: 'OK',
       message: 'FMP API is accessible',
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
+      usage: usage
     }
     
   } catch (error) {
+    const usage = fmpLimiter.getUsage()
+    
     return {
       status: 'ERROR',
       message: error.message,
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
+      usage: usage
     }
   }
+}
+
+/**
+ * Get rate limiter usage statistics
+ * @returns {Object} Usage statistics
+ */
+export function getFMPUsage() {
+  return fmpLimiter.getUsage()
 }
