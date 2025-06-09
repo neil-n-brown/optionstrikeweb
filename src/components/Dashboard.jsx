@@ -9,26 +9,29 @@ import SystemStatus from './SystemStatus'
 import Disclaimer from './Disclaimer'
 import LoadingSpinner from './LoadingSpinner'
 import ErrorBoundary from './ErrorBoundary'
+import ModeToggle from './ModeToggle'
 
 export default function Dashboard() {
   const [recommendations, setRecommendations] = useState([])
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(false) // Changed to false - no auto-loading
   const [error, setError] = useState(null)
   const [lastUpdate, setLastUpdate] = useState(null)
   const [isGenerating, setIsGenerating] = useState(false)
   const [rateLimited, setRateLimited] = useState(false)
+  const [demoMode, setDemoMode] = useState(true) // Start in demo mode
+  const [hasLoadedOnce, setHasLoadedOnce] = useState(false) // Track if user has loaded data
   const [systemStatus, setSystemStatus] = useState({
-    supabase: { status: 'CHECKING', message: 'Checking connection...' },
-    polygon: { status: 'CHECKING', message: 'Checking connection...' },
-    fmp: { status: 'CHECKING', message: 'Checking connection...' }
+    supabase: { status: 'UNKNOWN', message: 'Not checked yet' },
+    polygon: { status: 'UNKNOWN', message: 'Not checked yet' },
+    fmp: { status: 'UNKNOWN', message: 'Not checked yet' }
   })
 
-  const USE_MOCK_DATA = import.meta.env.VITE_USE_MOCK_DATA === 'true'
-
+  // Only check system health on mount, don't load recommendations
   useEffect(() => {
-    checkSystemHealth()
-    loadRecommendations()
-  }, [])
+    if (!demoMode) {
+      checkSystemHealth()
+    }
+  }, [demoMode])
 
   const checkSystemHealth = async () => {
     console.log('Checking system health...')
@@ -62,10 +65,13 @@ export default function Dashboard() {
     try {
       console.log('Loading recommendations...')
       
-      if (USE_MOCK_DATA) {
-        console.log('Using mock recommendations')
+      if (demoMode) {
+        console.log('Using mock recommendations (demo mode)')
+        // Simulate loading delay for demo
+        await new Promise(resolve => setTimeout(resolve, 1000))
         setRecommendations(mockRecommendations)
         setLastUpdate(new Date())
+        setHasLoadedOnce(true)
         return
       }
       
@@ -82,10 +88,11 @@ export default function Dashboard() {
       } else if (data && data.length > 0) {
         console.log(`Loaded ${data.length} recommendations from Supabase`)
         setRecommendations(data)
+        setHasLoadedOnce(true)
       } else {
-        console.log('No recommendations in database, generating new ones...')
-        await generateNewRecommendations()
-        return
+        console.log('No recommendations in database, need to generate new ones')
+        setRecommendations([])
+        setHasLoadedOnce(true)
       }
       
       setLastUpdate(new Date())
@@ -99,11 +106,7 @@ export default function Dashboard() {
         setRateLimited(true)
       }
       
-      // Only fall back to mock data if explicitly enabled
-      if (USE_MOCK_DATA) {
-        setRecommendations(mockRecommendations)
-        setLastUpdate(new Date())
-      }
+      setHasLoadedOnce(true)
     } finally {
       setLoading(false)
     }
@@ -117,11 +120,22 @@ export default function Dashboard() {
     try {
       console.log('Generating new recommendations...')
       
+      if (demoMode) {
+        // In demo mode, just refresh the mock data
+        console.log('Refreshing mock recommendations (demo mode)')
+        await new Promise(resolve => setTimeout(resolve, 2000)) // Simulate generation time
+        setRecommendations(mockRecommendations)
+        setLastUpdate(new Date())
+        setHasLoadedOnce(true)
+        return
+      }
+      
       const newRecommendations = await recommendationEngine.generateRecommendations()
       
       if (newRecommendations.length > 0) {
         setRecommendations(newRecommendations)
         setLastUpdate(new Date())
+        setHasLoadedOnce(true)
         console.log(`Generated ${newRecommendations.length} new recommendations`)
       } else {
         setError('No recommendations could be generated with current market conditions')
@@ -133,7 +147,7 @@ export default function Dashboard() {
       // Check if error is rate limit related
       if (err.message.includes('rate limit') || err.message.includes('429') || err.message.includes('Limit Reach')) {
         setRateLimited(true)
-        setError('API rate limit reached. Using cached data when available.')
+        setError('API rate limit reached. Please try again later or switch to demo mode.')
       } else {
         setError(`Failed to generate recommendations: ${err.message}`)
       }
@@ -144,9 +158,30 @@ export default function Dashboard() {
 
   const handleRefresh = async () => {
     await Promise.all([
-      checkSystemHealth(),
+      !demoMode && checkSystemHealth(),
       loadRecommendations()
-    ])
+    ].filter(Boolean))
+  }
+
+  const handleModeToggle = (isDemoMode) => {
+    setDemoMode(isDemoMode)
+    setRecommendations([]) // Clear current recommendations
+    setError(null)
+    setRateLimited(false)
+    setHasLoadedOnce(false)
+    setLastUpdate(null)
+    
+    if (!isDemoMode) {
+      // When switching to full mode, check system health
+      checkSystemHealth()
+    } else {
+      // When switching to demo mode, reset system status
+      setSystemStatus({
+        supabase: { status: 'DEMO', message: 'Demo mode - not using real database' },
+        polygon: { status: 'DEMO', message: 'Demo mode - using mock data' },
+        fmp: { status: 'DEMO', message: 'Demo mode - using mock data' }
+      })
+    }
   }
 
   const isDataStale = lastUpdate && (Date.now() - lastUpdate.getTime()) > 30 * 60 * 1000 // 30 minutes
@@ -165,12 +200,19 @@ export default function Dashboard() {
                 <div>
                   <h1 className="text-2xl font-bold text-corporate-900">OptionStrike</h1>
                   <p className="text-sm text-corporate-600">
-                    High-Probability Put Options {USE_MOCK_DATA && '(Demo Mode)'}
+                    High-Probability Put Options {demoMode && '(Demo Mode)'}
                   </p>
                 </div>
               </div>
               
               <div className="mt-4 sm:mt-0 flex items-center space-x-4">
+                {/* Mode Toggle */}
+                <ModeToggle 
+                  demoMode={demoMode} 
+                  onToggle={handleModeToggle}
+                  disabled={loading || isGenerating}
+                />
+                
                 {lastUpdate && (
                   <div className="text-sm text-corporate-600">
                     <span className="hidden sm:inline">Last updated: </span>
@@ -184,33 +226,42 @@ export default function Dashboard() {
                 )}
                 
                 <div className="flex space-x-2">
-                  <button 
-                    onClick={handleRefresh}
-                    className="bg-corporate-600 text-white px-4 py-2 rounded-lg hover:bg-corporate-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                    disabled={loading || isGenerating}
-                  >
-                    {loading ? (
-                      <div className="flex items-center space-x-2">
-                        <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                        <span>Loading...</span>
-                      </div>
-                    ) : (
-                      'Refresh'
-                    )}
-                  </button>
+                  {hasLoadedOnce && (
+                    <button 
+                      onClick={handleRefresh}
+                      className="bg-corporate-600 text-white px-4 py-2 rounded-lg hover:bg-corporate-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                      disabled={loading || isGenerating}
+                    >
+                      {loading ? (
+                        <div className="flex items-center space-x-2">
+                          <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                          <span>Loading...</span>
+                        </div>
+                      ) : (
+                        'Refresh'
+                      )}
+                    </button>
+                  )}
                   
                   <button 
-                    onClick={generateNewRecommendations}
+                    onClick={hasLoadedOnce ? generateNewRecommendations : loadRecommendations}
                     className="bg-primary-600 text-white px-4 py-2 rounded-lg hover:bg-primary-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                     disabled={loading || isGenerating}
                   >
                     {isGenerating ? (
                       <div className="flex items-center space-x-2">
                         <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                        <span>Generating...</span>
+                        <span>{demoMode ? 'Loading Demo...' : 'Generating...'}</span>
                       </div>
+                    ) : loading ? (
+                      <div className="flex items-center space-x-2">
+                        <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                        <span>Loading...</span>
+                      </div>
+                    ) : hasLoadedOnce ? (
+                      demoMode ? 'Refresh Demo Data' : 'Generate New'
                     ) : (
-                      'Generate New'
+                      'Get Recommendations'
                     )}
                   </button>
                 </div>
@@ -220,25 +271,45 @@ export default function Dashboard() {
         </header>
 
         <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-          {/* System Status */}
-          <SystemStatus status={systemStatus} />
+          {/* System Status - only show in full mode */}
+          {!demoMode && <SystemStatus status={systemStatus} />}
+          
+          {/* Demo Mode Info */}
+          {demoMode && (
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
+              <div className="flex">
+                <div className="flex-shrink-0">
+                  <svg className="h-5 w-5 text-blue-400" viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+                  </svg>
+                </div>
+                <div className="ml-3">
+                  <h3 className="text-sm font-medium text-blue-800">Demo Mode Active</h3>
+                  <div className="mt-2 text-sm text-blue-700">
+                    <p>You're currently viewing sample data to explore the application features.</p>
+                    <p className="mt-1">Switch to <strong>Full Mode</strong> using the toggle above to connect to real market data APIs.</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
           
           {/* Disclaimer */}
           <Disclaimer />
           
-          {/* API Setup Notice */}
-          {!USE_MOCK_DATA && (
+          {/* API Setup Notice - only show in full mode */}
+          {!demoMode && (
             <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
               <div className="flex">
                 <div className="flex-shrink-0">
-                  <svg className="h-5 w-5 text-blue-400\" viewBox="0 0 20 20\" fill="currentColor">
-                    <path fillRule="evenodd\" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z\" clipRule="evenodd" />
+                  <svg className="h-5 w-5 text-blue-400" viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
                   </svg>
                 </div>
                 <div className="ml-3">
-                  <h3 className="text-sm font-medium text-blue-800">API Configuration Required</h3>
+                  <h3 className="text-sm font-medium text-blue-800">Full Mode - Real Market Data</h3>
                   <div className="mt-2 text-sm text-blue-700">
-                    <p>To use real market data, please configure your API keys in the environment variables:</p>
+                    <p>You're using real market data. Make sure your API keys are configured:</p>
                     <ul className="mt-2 list-disc list-inside space-y-1">
                       <li><strong>VITE_POLYGON_API_KEY</strong> - Your Polygon.io API key</li>
                       <li><strong>VITE_FMP_API_KEY</strong> - Your Financial Modeling Prep API key</li>
@@ -268,7 +339,7 @@ export default function Dashboard() {
                       Please try again later or consider upgrading to a higher API plan for more frequent updates.
                     </p>
                     <p className="mt-2">
-                      <strong>Tip:</strong> The app will automatically use cached data when available to minimize API calls.
+                      <strong>Tip:</strong> Switch to Demo Mode to explore the app without API limitations.
                     </p>
                   </div>
                 </div>
@@ -289,7 +360,12 @@ export default function Dashboard() {
                   <h3 className="text-sm font-medium text-red-800">Error Loading Data</h3>
                   <div className="mt-2 text-sm text-red-700">
                     <p>{error}</p>
-                    <p className="mt-1">Please check your API configuration and try again.</p>
+                    <p className="mt-1">
+                      {demoMode ? 
+                        'Please try refreshing the demo data.' : 
+                        'Please check your API configuration and try again, or switch to Demo Mode.'
+                      }
+                    </p>
                   </div>
                 </div>
               </div>
@@ -302,11 +378,16 @@ export default function Dashboard() {
               <div className="flex items-center">
                 <LoadingSpinner size="sm" />
                 <div className="ml-3">
-                  <h3 className="text-sm font-medium text-blue-800">Generating Recommendations</h3>
+                  <h3 className="text-sm font-medium text-blue-800">
+                    {demoMode ? 'Loading Demo Data' : 'Generating Recommendations'}
+                  </h3>
                   <p className="text-sm text-blue-700 mt-1">
-                    Analyzing earnings calendar and options data. This may take a few minutes...
+                    {demoMode ? 
+                      'Preparing sample recommendations for demonstration...' :
+                      'Analyzing earnings calendar and options data. This may take a few minutes...'
+                    }
                   </p>
-                  {rateLimited && (
+                  {rateLimited && !demoMode && (
                     <p className="text-sm text-blue-600 mt-1">
                       Using cached data when possible to avoid rate limits.
                     </p>
@@ -319,8 +400,42 @@ export default function Dashboard() {
           {/* Loading State */}
           {loading ? (
             <div className="text-center py-12">
-              <LoadingSpinner size="lg" message="Loading recommendations..." />
-              <p className="text-sm text-corporate-500 mt-2">Analyzing options data and calculating confidence scores</p>
+              <LoadingSpinner size="lg" message={demoMode ? "Loading demo data..." : "Loading recommendations..."} />
+              <p className="text-sm text-corporate-500 mt-2">
+                {demoMode ? 
+                  'Preparing sample options data for demonstration' :
+                  'Analyzing options data and calculating confidence scores'
+                }
+              </p>
+            </div>
+          ) : !hasLoadedOnce ? (
+            /* Welcome State - Show when no data has been loaded yet */
+            <div className="text-center py-12">
+              <div className="w-16 h-16 bg-primary-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                <svg className="w-8 h-8 text-primary-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                </svg>
+              </div>
+              <h2 className="text-xl font-semibold text-corporate-900 mb-2">Welcome to OptionStrike</h2>
+              <p className="text-corporate-600 text-lg mb-4">
+                {demoMode ? 
+                  'Ready to explore high-probability put options with sample data' :
+                  'Ready to analyze real market data for high-probability put options'
+                }
+              </p>
+              <p className="text-corporate-500 text-sm mb-6">
+                {demoMode ? 
+                  'Click "Get Recommendations" to see sample options trading recommendations' :
+                  'Click "Get Recommendations" to fetch and analyze current market data'
+                }
+              </p>
+              <button 
+                onClick={loadRecommendations}
+                className="bg-primary-600 text-white px-6 py-3 rounded-lg hover:bg-primary-700 transition-colors text-lg font-medium"
+                disabled={loading || isGenerating}
+              >
+                Get Recommendations
+              </button>
             </div>
           ) : recommendations.length > 0 ? (
             <>
@@ -328,7 +443,9 @@ export default function Dashboard() {
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
                 <div className="bg-white rounded-lg shadow-sm border border-corporate-200 p-4">
                   <div className="text-2xl font-bold text-corporate-900">{recommendations.length}</div>
-                  <div className="text-sm text-corporate-600">Active Recommendations</div>
+                  <div className="text-sm text-corporate-600">
+                    {demoMode ? 'Demo Recommendations' : 'Active Recommendations'}
+                  </div>
                 </div>
                 <div className="bg-white rounded-lg shadow-sm border border-corporate-200 p-4">
                   <div className="text-2xl font-bold text-green-600">
@@ -360,7 +477,10 @@ export default function Dashboard() {
               </div>
               <p className="text-corporate-600 text-lg">No recommendations available</p>
               <p className="text-corporate-500 text-sm mt-2">
-                Click "Generate New" to create recommendations based on current market data
+                {demoMode ? 
+                  'Click "Get Recommendations" to load demo data' :
+                  'Click "Generate New" to create recommendations based on current market data'
+                }
               </p>
             </div>
           )}
