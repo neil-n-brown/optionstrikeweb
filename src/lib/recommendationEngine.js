@@ -6,6 +6,7 @@ import { getCachedData, setCachedData } from './cache'
 
 /**
  * Main recommendation engine that processes earnings and options data
+ * Now supports expanded stock universe beyond major US stocks
  */
 export class RecommendationEngine {
   constructor() {
@@ -15,15 +16,20 @@ export class RecommendationEngine {
     this.maxPOP = 93 // Maximum probability of profit
     this.maxDaysToExpiry = 14 // Maximum days to expiration
     this.minDaysToExpiry = 1 // Minimum days to expiration
+    this.maxSymbolsToProcess = 50 // Increased from 8 to process more stocks
+    this.minMarketCap = 1000000000 // $1B minimum market cap for liquidity
+    this.minVolume = 10 // Minimum daily volume for options
+    this.minOpenInterest = 50 // Minimum open interest for options
   }
 
   /**
    * Generate recommendations based on earnings calendar and options data
+   * Now processes expanded stock universe
    * @returns {Promise<Array>} Array of recommendations
    */
   async generateRecommendations() {
     try {
-      console.log('Starting recommendation generation...')
+      console.log('Starting recommendation generation with expanded stock universe...')
       
       // Check for cached recommendations first
       const cachedRecommendations = await this.getCachedRecommendations()
@@ -31,11 +37,11 @@ export class RecommendationEngine {
         console.log(`Found ${cachedRecommendations.length} cached recommendations`)
       }
       
-      // Step 1: Get earnings calendar for current and next week
+      // Step 1: Get earnings calendar with extended date range for broader coverage
       let earningsData
       try {
-        earningsData = await getEarningsCalendar()
-        console.log(`Found ${earningsData.length} companies with upcoming earnings`)
+        earningsData = await getEarningsCalendar(null, null, true) // Use extended range
+        console.log(`Found ${earningsData.length} companies with upcoming earnings (expanded universe)`)
       } catch (error) {
         console.error('Error fetching earnings data:', error)
         
@@ -59,52 +65,41 @@ export class RecommendationEngine {
         return cachedRecommendations
       }
       
-      // Step 2: Extract symbols and get options data (limit to avoid rate limits)
-      const symbols = earningsData.map(e => e.symbol).slice(0, 8) // Reduced from 10 to 8
-      console.log(`Fetching options data for symbols: ${symbols.join(', ')}`)
+      // Step 2: Filter and prioritize symbols for processing
+      const prioritizedSymbols = this.prioritizeSymbols(earningsData)
+      console.log(`Prioritized ${prioritizedSymbols.length} symbols for options analysis`)
       
-      let optionsData
-      try {
-        optionsData = await getMultipleOptionsChains(symbols)
-      } catch (error) {
-        console.error('Error fetching options data:', error)
-        
-        // If options fetch fails, use cached recommendations
-        if (cachedRecommendations.length > 0) {
-          console.warn('Using cached recommendations due to options API error')
-          return cachedRecommendations
-        }
-        
-        throw error
-      }
-      
-      // Step 3: Process each symbol and generate recommendations
+      // Step 3: Process symbols in batches to avoid overwhelming APIs
       const recommendations = []
+      const batchSize = 10 // Process 10 symbols at a time
       
-      for (const symbol of symbols) {
+      for (let i = 0; i < prioritizedSymbols.length; i += batchSize) {
+        const batch = prioritizedSymbols.slice(i, i + batchSize)
+        console.log(`Processing batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(prioritizedSymbols.length / batchSize)} (${batch.length} symbols)`)
+        
         try {
-          const earnings = earningsData.find(e => e.symbol === symbol)
-          const options = optionsData.results[symbol]
+          const batchRecommendations = await this.processBatch(batch, earningsData)
+          recommendations.push(...batchRecommendations)
           
-          if (!earnings || !options || !options.options) {
-            console.log(`Skipping ${symbol}: missing earnings or options data`)
-            continue
+          // Add delay between batches to respect rate limits
+          if (i + batchSize < prioritizedSymbols.length) {
+            const delay = 3000 + Math.random() * 2000 // 3-5 second delay
+            console.log(`Waiting ${Math.round(delay)}ms before next batch...`)
+            await new Promise(resolve => setTimeout(resolve, delay))
           }
           
-          const symbolRecommendations = await this.processSymbol(symbol, earnings, options)
-          recommendations.push(...symbolRecommendations)
-          
         } catch (error) {
-          console.error(`Error processing ${symbol}:`, error)
+          console.error(`Error processing batch starting at index ${i}:`, error)
+          // Continue with next batch instead of failing completely
         }
       }
       
       // Step 4: Sort by confidence score and return top recommendations
       const sortedRecommendations = recommendations
         .sort((a, b) => b.confidence_score - a.confidence_score)
-        .slice(0, 20) // Top 20 recommendations
+        .slice(0, 30) // Increased from 20 to 30 recommendations
       
-      console.log(`Generated ${sortedRecommendations.length} new recommendations`)
+      console.log(`Generated ${sortedRecommendations.length} new recommendations from expanded stock universe`)
       
       // Step 5: Save to database if we have new recommendations
       if (sortedRecommendations.length > 0) {
@@ -131,6 +126,121 @@ export class RecommendationEngine {
   }
 
   /**
+   * Prioritize symbols based on market cap, volume, and other factors
+   * @param {Array} earningsData - Raw earnings data
+   * @returns {Array} Prioritized symbol list
+   */
+  prioritizeSymbols(earningsData) {
+    // Filter and score symbols
+    const scoredSymbols = earningsData
+      .filter(earning => {
+        // Basic validation
+        if (!earning.symbol || earning.symbol.length < 1 || earning.symbol.length > 5) {
+          return false
+        }
+        
+        // Exclude symbols with special characters (usually not optionable)
+        if (earning.symbol.includes('.') || earning.symbol.includes('-') || earning.symbol.includes('/')) {
+          return false
+        }
+        
+        // Exclude symbols with numbers (usually not optionable)
+        if (/\d/.test(earning.symbol)) {
+          return false
+        }
+        
+        // Market cap filter (if available)
+        if (earning.marketCap && earning.marketCap < this.minMarketCap) {
+          return false
+        }
+        
+        return true
+      })
+      .map(earning => {
+        // Calculate priority score
+        let score = 0
+        
+        // Market cap score (higher is better)
+        if (earning.marketCap) {
+          score += Math.min(50, Math.log10(earning.marketCap / 1000000000) * 10)
+        }
+        
+        // EPS growth score
+        if (earning.epsGrowth) {
+          score += Math.max(-10, Math.min(20, earning.epsGrowth / 5))
+        }
+        
+        // Revenue score
+        if (earning.revenue) {
+          score += Math.min(20, Math.log10(earning.revenue / 1000) * 5)
+        }
+        
+        // Symbol length preference (shorter symbols often more liquid)
+        score += (6 - earning.symbol.length) * 2
+        
+        // Known high-volume sectors get bonus
+        const symbol = earning.symbol.toUpperCase()
+        if (['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA', 'NVDA', 'META', 'NFLX'].includes(symbol)) {
+          score += 30 // Bonus for known liquid stocks
+        }
+        
+        return {
+          symbol: earning.symbol,
+          score: score,
+          earning: earning
+        }
+      })
+      .sort((a, b) => b.score - a.score) // Sort by score descending
+      .slice(0, this.maxSymbolsToProcess) // Take top N symbols
+    
+    console.log(`Symbol prioritization complete. Top 10 symbols:`)
+    scoredSymbols.slice(0, 10).forEach((item, index) => {
+      console.log(`${index + 1}. ${item.symbol} (score: ${item.score.toFixed(1)})`)
+    })
+    
+    return scoredSymbols.map(item => item.symbol)
+  }
+
+  /**
+   * Process a batch of symbols
+   * @param {Array} symbols - Symbols to process
+   * @param {Array} earningsData - Earnings data for reference
+   * @returns {Array} Recommendations from this batch
+   */
+  async processBatch(symbols, earningsData) {
+    const recommendations = []
+    
+    try {
+      // Get options data for the batch
+      const optionsData = await getMultipleOptionsChains(symbols)
+      
+      // Process each symbol in the batch
+      for (const symbol of symbols) {
+        try {
+          const earnings = earningsData.find(e => e.symbol === symbol)
+          const options = optionsData.results[symbol]
+          
+          if (!earnings || !options || !options.options) {
+            console.log(`Skipping ${symbol}: missing earnings or options data`)
+            continue
+          }
+          
+          const symbolRecommendations = await this.processSymbol(symbol, earnings, options)
+          recommendations.push(...symbolRecommendations)
+          
+        } catch (error) {
+          console.error(`Error processing ${symbol}:`, error)
+        }
+      }
+      
+    } catch (error) {
+      console.error('Error processing batch:', error)
+    }
+    
+    return recommendations
+  }
+
+  /**
    * Process a single symbol to generate recommendations
    * @param {string} symbol - Stock symbol
    * @param {Object} earnings - Earnings data
@@ -150,7 +260,7 @@ export class RecommendationEngine {
     
     for (const option of options.options) {
       try {
-        // Filter by basic criteria
+        // Filter by basic criteria (same rigorous filtering as before)
         if (!this.meetsBasicCriteria(option, stockPrice, earnings.date)) {
           continue
         }
@@ -165,7 +275,7 @@ export class RecommendationEngine {
           option.impliedVolatility
         )
         
-        // Check if POP is within target range
+        // Check if POP is within target range (same criteria)
         if (pop < this.minPOP || pop > this.maxPOP) {
           continue
         }
@@ -174,7 +284,7 @@ export class RecommendationEngine {
         const breakeven = calculateBreakeven(option.strike, option.premium)
         const maxLoss = calculateMaxLoss(option.strike, option.premium)
         
-        // Calculate confidence score
+        // Calculate confidence score (same algorithm)
         const confidenceScore = calculateConfidenceScore(
           option.impliedVolatility,
           option.openInterest,
@@ -217,25 +327,25 @@ export class RecommendationEngine {
   }
 
   /**
-   * Check if option meets basic filtering criteria
+   * Check if option meets basic filtering criteria (unchanged - same rigorous standards)
    * @param {Object} option - Option data
    * @param {number} stockPrice - Current stock price
    * @param {string} earningsDate - Earnings date
    * @returns {boolean} True if meets criteria
    */
   meetsBasicCriteria(option, stockPrice, earningsDate) {
-    // Check delta
+    // Check delta (same criteria)
     if (Math.abs(option.delta) > this.minDelta) {
       return false
     }
     
-    // Check premium percentage
+    // Check premium percentage (same criteria)
     const premiumPercentage = calculatePremiumPercentage(option.premium, stockPrice)
     if (premiumPercentage < this.minPremiumPercentage) {
       return false
     }
     
-    // Check days to expiration
+    // Check days to expiration (same criteria)
     const daysToExpiry = Math.ceil(
       (new Date(option.expiration) - new Date()) / (1000 * 60 * 60 * 24)
     )
@@ -244,7 +354,7 @@ export class RecommendationEngine {
       return false
     }
     
-    // Check if expiration is after earnings
+    // Check if expiration is after earnings (same criteria)
     const expiryDate = new Date(option.expiration)
     const earningsDateObj = new Date(earningsDate)
     
@@ -252,12 +362,12 @@ export class RecommendationEngine {
       return false
     }
     
-    // Check minimum volume and open interest
-    if (option.volume < 10 || option.openInterest < 50) {
+    // Check minimum volume and open interest (same criteria)
+    if (option.volume < this.minVolume || option.openInterest < this.minOpenInterest) {
       return false
     }
     
-    // Check if premium is reasonable
+    // Check if premium is reasonable (same criteria)
     if (option.premium <= 0 || option.premium > stockPrice * 0.1) {
       return false
     }
@@ -276,7 +386,7 @@ export class RecommendationEngine {
         .select('*')
         .eq('is_active', true)
         .order('confidence_score', { ascending: false })
-        .limit(20)
+        .limit(30) // Increased from 20 to 30
       
       if (error) {
         console.warn('Error fetching cached recommendations:', error)
@@ -350,14 +460,18 @@ export class RecommendationEngine {
     if (criteria.maxPOP !== undefined) this.maxPOP = criteria.maxPOP
     if (criteria.maxDaysToExpiry !== undefined) this.maxDaysToExpiry = criteria.maxDaysToExpiry
     if (criteria.minDaysToExpiry !== undefined) this.minDaysToExpiry = criteria.minDaysToExpiry
+    if (criteria.maxSymbolsToProcess !== undefined) this.maxSymbolsToProcess = criteria.maxSymbolsToProcess
+    if (criteria.minMarketCap !== undefined) this.minMarketCap = criteria.minMarketCap
     
-    console.log('Updated filtering criteria:', {
+    console.log('Updated filtering criteria for expanded stock universe:', {
       minDelta: this.minDelta,
       minPremiumPercentage: this.minPremiumPercentage,
       minPOP: this.minPOP,
       maxPOP: this.maxPOP,
       maxDaysToExpiry: this.maxDaysToExpiry,
-      minDaysToExpiry: this.minDaysToExpiry
+      minDaysToExpiry: this.minDaysToExpiry,
+      maxSymbolsToProcess: this.maxSymbolsToProcess,
+      minMarketCap: this.minMarketCap
     })
   }
 }

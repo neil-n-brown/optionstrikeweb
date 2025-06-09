@@ -58,26 +58,52 @@ function getNextWeekRange() {
 }
 
 /**
- * Fetches earnings calendar data from FMP API with enhanced error handling
+ * Gets extended date range for broader stock coverage
+ * @returns {Object} From and to dates for extended period
+ */
+function getExtendedDateRange() {
+  const now = new Date()
+  const startDate = new Date(now)
+  startDate.setDate(now.getDate() - 3) // Start 3 days ago
+  
+  const endDate = new Date(now)
+  endDate.setDate(now.getDate() + 21) // Extend 3 weeks into future
+  
+  return {
+    from: startDate.toISOString().split('T')[0],
+    to: endDate.toISOString().split('T')[0]
+  }
+}
+
+/**
+ * Fetches earnings calendar data from FMP API with enhanced error handling and expanded coverage
  * @param {string} fromDate - Start date (YYYY-MM-DD)
  * @param {string} toDate - End date (YYYY-MM-DD)
+ * @param {boolean} expandedRange - Whether to use extended date range for broader coverage
  * @returns {Promise<Array>} Earnings calendar data
  */
-export async function getEarningsCalendar(fromDate = null, toDate = null) {
-  // Use current and next week if no dates provided
+export async function getEarningsCalendar(fromDate = null, toDate = null, expandedRange = true) {
+  // Use extended range for broader stock coverage if no dates provided
   if (!fromDate || !toDate) {
-    const currentWeek = getCurrentWeekRange()
-    const nextWeek = getNextWeekRange()
-    fromDate = currentWeek.from
-    toDate = nextWeek.to
+    if (expandedRange) {
+      const extended = getExtendedDateRange()
+      fromDate = extended.from
+      toDate = extended.to
+      console.log(`Using extended date range for broader coverage: ${fromDate} to ${toDate}`)
+    } else {
+      const currentWeek = getCurrentWeekRange()
+      const nextWeek = getNextWeekRange()
+      fromDate = currentWeek.from
+      toDate = nextWeek.to
+    }
   }
   
-  const cacheKey = `fmp_earnings_${fromDate}_${toDate}`
+  const cacheKey = `fmp_earnings_${fromDate}_${toDate}${expandedRange ? '_extended' : ''}`
   
   // Check cache first (longer cache for FMP data)
   let cachedData = await getCachedData(cacheKey)
   if (cachedData) {
-    console.log(`Using cached earnings calendar for ${fromDate} to ${toDate}`)
+    console.log(`Using cached earnings calendar for ${fromDate} to ${toDate} (${cachedData.length} companies)`)
     return cachedData
   }
   
@@ -99,7 +125,7 @@ export async function getEarningsCalendar(fromDate = null, toDate = null) {
   }
   
   try {
-    console.log(`Fetching earnings calendar from FMP API for ${fromDate} to ${toDate}`)
+    console.log(`Fetching earnings calendar from FMP API for ${fromDate} to ${toDate} (expanded coverage)`)
     
     // Check rate limiter before making request
     await fmpLimiter.checkLimit()
@@ -114,13 +140,15 @@ export async function getEarningsCalendar(fromDate = null, toDate = null) {
       throw new APIError('Invalid response format from earnings API', 500, 'FMP')
     }
     
+    console.log(`Raw earnings data received: ${data.length} companies`)
+    
     // Process and enhance earnings data
     const processedData = await processEarningsData(data)
     
     // Cache for longer duration (4 hours) since earnings don't change frequently
     await setCachedData(cacheKey, processedData, CACHE_EARNINGS_MINUTES)
     
-    console.log(`Fetched fresh earnings calendar for ${fromDate} to ${toDate}: ${processedData.length} companies`)
+    console.log(`Processed earnings calendar: ${processedData.length} companies with enhanced data`)
     return processedData
     
   } catch (error) {
@@ -133,7 +161,7 @@ export async function getEarningsCalendar(fromDate = null, toDate = null) {
       // Try to return stale cached data as fallback
       const staleData = await getCachedData(`${cacheKey}_stale`)
       if (staleData) {
-        console.log(`Using stale cached earnings data`)
+        console.log(`Using stale cached earnings data (${staleData.length} companies)`)
         return staleData
       }
       
@@ -154,16 +182,45 @@ export async function getEarningsCalendar(fromDate = null, toDate = null) {
 async function processEarningsData(rawData) {
   const processedData = []
   
+  // Filter out symbols that are clearly not suitable for options trading
+  const filteredData = rawData.filter(earning => {
+    const symbol = earning.symbol
+    
+    // Basic symbol validation
+    if (!symbol || symbol.length < 1 || symbol.length > 5) {
+      return false
+    }
+    
+    // Exclude obvious penny stocks or problematic symbols
+    if (symbol.includes('.') || symbol.includes('-') || symbol.includes('/')) {
+      return false
+    }
+    
+    // Exclude symbols with numbers (usually not optionable)
+    if (/\d/.test(symbol)) {
+      return false
+    }
+    
+    // Exclude symbols that are too short or too long
+    if (symbol.length < 1 || symbol.length > 5) {
+      return false
+    }
+    
+    return true
+  })
+  
+  console.log(`Filtered earnings data: ${filteredData.length} suitable symbols from ${rawData.length} total`)
+  
   // Process in smaller batches to avoid rate limits
   const batchSize = 5
-  const symbols = [...new Set(rawData.map(e => e.symbol))]
+  const symbols = [...new Set(filteredData.map(e => e.symbol))]
   
   console.log(`Processing ${symbols.length} unique symbols in batches of ${batchSize}`)
   
   // Get EPS growth data in batches
   const epsGrowthData = await calculateEPSGrowthBatch(symbols, batchSize)
   
-  for (const earning of rawData) {
+  for (const earning of filteredData) {
     try {
       const epsGrowth = epsGrowthData[earning.symbol] || 0
       
@@ -488,7 +545,7 @@ export async function checkFMPAPIHealth() {
     
     return {
       status: 'OK',
-      message: 'FMP API is accessible',
+      message: 'FMP API is accessible - Expanded stock universe enabled',
       timestamp: new Date().toISOString(),
       usage: usage,
       rateLimitInfo: {

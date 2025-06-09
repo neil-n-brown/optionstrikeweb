@@ -4,12 +4,14 @@ import { checkPolygonAPIHealth } from '../lib/polygon'
 import { checkFMPAPIHealth } from '../lib/earnings'
 import { recommendationEngine } from '../lib/recommendationEngine'
 import { mockRecommendations } from '../lib/mockData'
+import { clearAllCache, getCacheStats } from '../lib/cache'
 import RecommendationCard from './RecommendationCard'
 import SystemStatus from './SystemStatus'
 import Disclaimer from './Disclaimer'
 import LoadingSpinner from './LoadingSpinner'
 import ErrorBoundary from './ErrorBoundary'
 import ModeToggle from './ModeToggle'
+import CacheManager from './CacheManager'
 
 export default function Dashboard() {
   const [recommendations, setRecommendations] = useState([])
@@ -20,13 +22,63 @@ export default function Dashboard() {
   const [rateLimited, setRateLimited] = useState(false)
   const [demoMode, setDemoMode] = useState(true) // Start in demo mode
   const [hasLoadedOnce, setHasLoadedOnce] = useState(false)
+  const [cacheStats, setCacheStats] = useState(null)
+  const [clearingCache, setClearingCache] = useState(false)
   const [systemStatus, setSystemStatus] = useState({
     supabase: { status: 'UNKNOWN', message: 'Not checked yet' },
     polygon: { status: 'UNKNOWN', message: 'Not checked yet' },
     fmp: { status: 'UNKNOWN', message: 'Not checked yet' }
   })
 
-  // No useEffect for auto-loading - app starts completely clean
+  // Load cache stats on component mount
+  useEffect(() => {
+    loadCacheStats()
+  }, [])
+
+  const loadCacheStats = async () => {
+    try {
+      const stats = await getCacheStats()
+      setCacheStats(stats)
+    } catch (error) {
+      console.error('Error loading cache stats:', error)
+    }
+  }
+
+  const handleClearCache = async () => {
+    setClearingCache(true)
+    try {
+      console.log('Clearing all cached data...')
+      
+      // Clear Supabase cache
+      const success = await clearAllCache()
+      
+      // Clear any local storage cache
+      if (typeof Storage !== 'undefined') {
+        localStorage.removeItem('optionstrike_cache')
+        sessionStorage.clear()
+      }
+      
+      if (success) {
+        console.log('Cache cleared successfully')
+        await loadCacheStats() // Refresh cache stats
+        
+        // Show success message briefly
+        const originalError = error
+        setError('Cache cleared successfully!')
+        setTimeout(() => {
+          setError(originalError)
+        }, 3000)
+      } else {
+        setError('Failed to clear cache completely')
+      }
+      
+    } catch (error) {
+      console.error('Error clearing cache:', error)
+      setError(`Failed to clear cache: ${error.message}`)
+    } finally {
+      setClearingCache(false)
+    }
+  }
 
   const checkSystemHealth = async () => {
     console.log('Checking system health...')
@@ -238,6 +290,14 @@ export default function Dashboard() {
               </div>
               
               <div className="mt-4 sm:mt-0 flex items-center space-x-4">
+                {/* Cache Manager */}
+                <CacheManager 
+                  cacheStats={cacheStats}
+                  onClearCache={handleClearCache}
+                  clearingCache={clearingCache}
+                  onRefreshStats={loadCacheStats}
+                />
+                
                 {/* Mode Toggle */}
                 <ModeToggle 
                   demoMode={demoMode} 
@@ -311,8 +371,8 @@ export default function Dashboard() {
             <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
               <div className="flex">
                 <div className="flex-shrink-0">
-                  <svg className="h-5 w-5 text-blue-400\" viewBox="0 0 20 20\" fill="currentColor">
-                    <path fillRule="evenodd\" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z\" clipRule="evenodd" />
+                  <svg className="h-5 w-5 text-blue-400" viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
                   </svg>
                 </div>
                 <div className="ml-3">
@@ -334,19 +394,19 @@ export default function Dashboard() {
             <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
               <div className="flex">
                 <div className="flex-shrink-0">
-                  <svg className="h-5 w-5 text-blue-400\" viewBox="0 0 20 20\" fill="currentColor">
-                    <path fillRule="evenodd\" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z\" clipRule="evenodd" />
+                  <svg className="h-5 w-5 text-blue-400" viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
                   </svg>
                 </div>
                 <div className="ml-3">
-                  <h3 className="text-sm font-medium text-blue-800">Full Mode - Real Market Data</h3>
+                  <h3 className="text-sm font-medium text-blue-800">Full Mode - Expanded Stock Universe</h3>
                   <div className="mt-2 text-sm text-blue-700">
-                    <p>You're using real market data. Make sure your API keys are configured:</p>
+                    <p>You're using real market data with expanded coverage:</p>
                     <ul className="mt-2 list-disc list-inside space-y-1">
-                      <li><strong>VITE_POLYGON_API_KEY</strong> - Your Polygon.io API key</li>
-                      <li><strong>VITE_FMP_API_KEY</strong> - Your Financial Modeling Prep API key</li>
-                      <li><strong>VITE_SUPABASE_URL</strong> - Your Supabase project URL</li>
-                      <li><strong>VITE_SUPABASE_ANON_KEY</strong> - Your Supabase anonymous key</li>
+                      <li><strong>All US-listed stocks</strong> - Not just major companies</li>
+                      <li><strong>ADRs</strong> - American Depositary Receipts of foreign companies</li>
+                      <li><strong>Any symbol</strong> with liquid options on US exchanges</li>
+                      <li><strong>Same rigorous filtering</strong> - Delta &lt;0.2, Premium &gt;3.5%, POP 87-93%</li>
                     </ul>
                   </div>
                 </div>
@@ -381,23 +441,41 @@ export default function Dashboard() {
           
           {/* Error State */}
           {error && (
-            <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-6">
+            <div className={`border rounded-lg p-4 mb-6 ${
+              error.includes('successfully') ? 
+                'bg-green-50 border-green-200' : 
+                'bg-red-50 border-red-200'
+            }`}>
               <div className="flex">
                 <div className="flex-shrink-0">
-                  <svg className="h-5 w-5 text-red-400" viewBox="0 0 20 20" fill="currentColor">
-                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
-                  </svg>
+                  {error.includes('successfully') ? (
+                    <svg className="h-5 w-5 text-green-400" viewBox="0 0 20 20" fill="currentColor">
+                      <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                    </svg>
+                  ) : (
+                    <svg className="h-5 w-5 text-red-400" viewBox="0 0 20 20" fill="currentColor">
+                      <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                    </svg>
+                  )}
                 </div>
                 <div className="ml-3">
-                  <h3 className="text-sm font-medium text-red-800">Error Loading Data</h3>
-                  <div className="mt-2 text-sm text-red-700">
+                  <h3 className={`text-sm font-medium ${
+                    error.includes('successfully') ? 'text-green-800' : 'text-red-800'
+                  }`}>
+                    {error.includes('successfully') ? 'Success' : 'Error Loading Data'}
+                  </h3>
+                  <div className={`mt-2 text-sm ${
+                    error.includes('successfully') ? 'text-green-700' : 'text-red-700'
+                  }`}>
                     <p>{error}</p>
-                    <p className="mt-1">
-                      {demoMode ? 
-                        'Please try refreshing the demo data.' : 
-                        'Please check your API configuration and try again, or switch to Demo Mode.'
-                      }
-                    </p>
+                    {!error.includes('successfully') && (
+                      <p className="mt-1">
+                        {demoMode ? 
+                          'Please try refreshing the demo data.' : 
+                          'Please check your API configuration and try again, or switch to Demo Mode.'
+                        }
+                      </p>
+                    )}
                   </div>
                 </div>
               </div>
@@ -411,12 +489,12 @@ export default function Dashboard() {
                 <LoadingSpinner size="sm" />
                 <div className="ml-3">
                   <h3 className="text-sm font-medium text-blue-800">
-                    {demoMode ? 'Loading Demo Data' : 'Generating Recommendations'}
+                    {demoMode ? 'Loading Demo Data' : 'Scanning Expanded Stock Universe'}
                   </h3>
                   <p className="text-sm text-blue-700 mt-1">
                     {demoMode ? 
                       'Preparing sample recommendations for demonstration...' :
-                      'Analyzing earnings calendar and options data. This may take a few minutes...'
+                      'Analyzing earnings calendar and options data across all US-listed stocks. This may take a few minutes...'
                     }
                   </p>
                 </div>
@@ -447,13 +525,13 @@ export default function Dashboard() {
               <p className="text-corporate-600 text-lg mb-4">
                 {demoMode ? 
                   'Ready to explore high-probability put options with sample data' :
-                  'Ready to analyze real market data for high-probability put options'
+                  'Ready to analyze the entire US stock universe for high-probability put options'
                 }
               </p>
               <p className="text-corporate-500 text-sm mb-6">
                 {demoMode ? 
                   'Click "Get Recommendations" to see sample options trading recommendations' :
-                  'Click "Get Recommendations" to fetch and analyze current market data'
+                  'Click "Get Recommendations" to scan all US-listed stocks for opportunities'
                 }
               </p>
               <button 
@@ -513,7 +591,7 @@ export default function Dashboard() {
               <p className="text-corporate-500 text-sm mt-2 mb-4">
                 {demoMode ? 
                   'No demo data loaded yet. Click "Get Recommendations" to load sample data.' :
-                  'No recommendations found in the database. Click "Generate New" to create recommendations based on current market data.'
+                  'No recommendations found in the database. Click "Generate New" to scan the entire stock universe for opportunities.'
                 }
               </p>
               {!demoMode && (
@@ -525,10 +603,10 @@ export default function Dashboard() {
                   {isGenerating ? (
                     <div className="flex items-center space-x-2">
                       <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                      <span>Generating...</span>
+                      <span>Scanning...</span>
                     </div>
                   ) : (
-                    'Generate New Recommendations'
+                    'Scan All Stocks'
                   )}
                 </button>
               )}
