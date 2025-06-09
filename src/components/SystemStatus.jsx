@@ -1,5 +1,5 @@
-import { getPolygonUsage, getFMPUsage } from '../lib/polygon'
-import { getFMPUsage as getFMPUsageFromEarnings } from '../lib/earnings'
+import { getPolygonUsage } from '../lib/polygon'
+import { getFMPUsage } from '../lib/earnings'
 
 export default function SystemStatus({ status }) {
   const getStatusColor = (statusValue) => {
@@ -120,7 +120,7 @@ export default function SystemStatus({ status }) {
       {hasErrors && (
         <div className="mt-3 pt-3 border-t border-red-200">
           <p className="text-xs text-red-700">
-            Some services are experiencing issues. The app will use cached data when available.
+            Some services are experiencing issues. Please check your API configuration.
           </p>
         </div>
       )}
@@ -129,7 +129,7 @@ export default function SystemStatus({ status }) {
       {(status.polygon?.usage?.remaining <= 1 || status.fmp?.usage?.remaining <= 10) && (
         <div className="mt-3 pt-3 border-t border-yellow-200">
           <p className="text-xs text-yellow-700">
-            ⚠️ API quota is running low. Consider switching to mock data mode or wait for quota reset.
+            ⚠️ API quota is running low. Consider monitoring usage carefully.
           </p>
         </div>
       )}

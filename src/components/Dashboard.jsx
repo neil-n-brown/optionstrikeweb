@@ -75,14 +75,15 @@ export default function Dashboard() {
         .order('confidence_score', { ascending: false })
       
       if (supabaseError) {
-        console.warn('Supabase query failed, using mock data:', supabaseError)
-        setRecommendations(mockRecommendations)
+        console.warn('Supabase query failed:', supabaseError)
+        throw new Error(`Database error: ${supabaseError.message}`)
       } else if (data && data.length > 0) {
         console.log(`Loaded ${data.length} recommendations from Supabase`)
         setRecommendations(data)
       } else {
-        console.log('No recommendations in database, using mock data')
-        setRecommendations(mockRecommendations)
+        console.log('No recommendations in database, generating new ones...')
+        await generateNewRecommendations()
+        return
       }
       
       setLastUpdate(new Date())
@@ -90,19 +91,18 @@ export default function Dashboard() {
     } catch (err) {
       console.error('Error loading recommendations:', err)
       setError(err.message)
-      // Fall back to mock data on error
-      setRecommendations(mockRecommendations)
+      
+      // Only fall back to mock data if explicitly enabled
+      if (USE_MOCK_DATA) {
+        setRecommendations(mockRecommendations)
+        setLastUpdate(new Date())
+      }
     } finally {
       setLoading(false)
     }
   }
 
   const generateNewRecommendations = async () => {
-    if (USE_MOCK_DATA) {
-      console.log('Cannot generate new recommendations in mock data mode')
-      return
-    }
-
     setIsGenerating(true)
     setError(null)
     
@@ -184,22 +184,20 @@ export default function Dashboard() {
                     )}
                   </button>
                   
-                  {!USE_MOCK_DATA && (
-                    <button 
-                      onClick={generateNewRecommendations}
-                      className="bg-primary-600 text-white px-4 py-2 rounded-lg hover:bg-primary-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                      disabled={loading || isGenerating}
-                    >
-                      {isGenerating ? (
-                        <div className="flex items-center space-x-2">
-                          <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                          <span>Generating...</span>
-                        </div>
-                      ) : (
-                        'Generate New'
-                      )}
-                    </button>
-                  )}
+                  <button 
+                    onClick={generateNewRecommendations}
+                    className="bg-primary-600 text-white px-4 py-2 rounded-lg hover:bg-primary-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    disabled={loading || isGenerating}
+                  >
+                    {isGenerating ? (
+                      <div className="flex items-center space-x-2">
+                        <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                        <span>Generating...</span>
+                      </div>
+                    ) : (
+                      'Generate New'
+                    )}
+                  </button>
                 </div>
               </div>
             </div>
@@ -213,24 +211,45 @@ export default function Dashboard() {
           {/* Disclaimer */}
           <Disclaimer />
           
+          {/* API Setup Notice */}
+          {!USE_MOCK_DATA && (
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
+              <div className="flex">
+                <div className="flex-shrink-0">
+                  <svg className="h-5 w-5 text-blue-400" viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+                  </svg>
+                </div>
+                <div className="ml-3">
+                  <h3 className="text-sm font-medium text-blue-800">API Configuration Required</h3>
+                  <div className="mt-2 text-sm text-blue-700">
+                    <p>To use real market data, please configure your API keys in the environment variables:</p>
+                    <ul className="mt-2 list-disc list-inside space-y-1">
+                      <li><strong>VITE_POLYGON_API_KEY</strong> - Your Polygon.io API key</li>
+                      <li><strong>VITE_FMP_API_KEY</strong> - Your Financial Modeling Prep API key</li>
+                      <li><strong>VITE_SUPABASE_URL</strong> - Your Supabase project URL</li>
+                      <li><strong>VITE_SUPABASE_ANON_KEY</strong> - Your Supabase anonymous key</li>
+                    </ul>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+          
           {/* Error State */}
           {error && (
             <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-6">
               <div className="flex">
                 <div className="flex-shrink-0">
-                  <svg className="h-5 w-5 text-red-400\" viewBox="0 0 20 20\" fill="currentColor">
-                    <path fillRule="evenodd\" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z\" clipRule="evenodd" />
+                  <svg className="h-5 w-5 text-red-400" viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
                   </svg>
                 </div>
                 <div className="ml-3">
                   <h3 className="text-sm font-medium text-red-800">Error Loading Data</h3>
                   <div className="mt-2 text-sm text-red-700">
                     <p>{error}</p>
-                    {USE_MOCK_DATA ? (
-                      <p className="mt-1">Currently running in demo mode with sample data.</p>
-                    ) : (
-                      <p className="mt-1">Displaying cached or fallback data instead.</p>
-                    )}
+                    <p className="mt-1">Please check your API configuration and try again.</p>
                   </div>
                 </div>
               </div>
@@ -296,10 +315,7 @@ export default function Dashboard() {
               </div>
               <p className="text-corporate-600 text-lg">No recommendations available</p>
               <p className="text-corporate-500 text-sm mt-2">
-                {USE_MOCK_DATA ? 
-                  'Switch to live data mode to generate real recommendations' :
-                  'Click "Generate New" to create recommendations or check back later'
-                }
+                Click "Generate New" to create recommendations based on current market data
               </p>
             </div>
           )}
