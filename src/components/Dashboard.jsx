@@ -406,7 +406,7 @@ export default function Dashboard() {
                       <li><strong>All US-listed stocks</strong> - Not just major companies</li>
                       <li><strong>ADRs</strong> - American Depositary Receipts of foreign companies</li>
                       <li><strong>Any symbol</strong> with liquid options on US exchanges</li>
-                      <li><strong>Same rigorous filtering</strong> - Delta <0.2, Premium >3.5%, POP 87-93%</li>
+                      <li><strong>Same rigorous filtering</strong> - Delta &lt;0.2, Premium &gt;3.5%, POP 87-93%</li>
                     </ul>
                   </div>
                 </div>
